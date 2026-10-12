@@ -850,7 +850,7 @@ service "web" {
 		if startup.key != "startup" || startup.blankBefore != false {
 			t.Errorf("startup blankBefore = %v, want false", startup.blankBefore)
 		}
-		if len(startup.comments) != 1 || startup.comments[0].text != "起動スクリプト。各行を \\ で始める" || startup.comments[0].blankBefore != true {
+		if len(startup.comments) != 1 || startup.comments[0].text != `起動スクリプト。各行を \\ で始める` || startup.comments[0].blankBefore != true {
 			t.Errorf("startup comments mismatch: %+v", startup.comments)
 		}
 		startupRaw, ok := startup.value.(*rawNode)
