@@ -1,0 +1,7 @@
+# Personal MCP client settings
+.mcp.json
+.codex/
+.claude/settings.local.json
+
+# Internal documentation
+docs/internal/
