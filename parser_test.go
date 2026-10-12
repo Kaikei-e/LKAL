@@ -867,6 +867,149 @@ service "web" {
 	})
 }
 
+func TestNestedBlockFirstItemBlankBefore(t *testing.T) {
+	t.Run("entry_without_blank_line", func(t *testing.T) {
+		src := `@lkal "0.1"
+
+parent {
+  child = 1
+}
+`
+		file := parserMustParse(t, "nested_entry_no_blank.lkal", src)
+		if file.body == nil || len(file.body.entries) != 1 {
+			t.Fatalf("expected 1 top-level entry, got %+v", file.body)
+		}
+		parent := file.body.entries[0]
+		if parent.body == nil || len(parent.body.entries) != 1 {
+			t.Fatalf("expected 1 child entry in block, got %+v", parent.body)
+		}
+		child := parent.body.entries[0]
+		if child.blankBefore != false {
+			t.Errorf("child.blankBefore = %v, want false", child.blankBefore)
+		}
+	})
+
+	t.Run("entry_with_blank_line", func(t *testing.T) {
+		src := `@lkal "0.1"
+
+parent {
+
+  child = 1
+}
+`
+		file := parserMustParse(t, "nested_entry_with_blank.lkal", src)
+		if file.body == nil || len(file.body.entries) != 1 {
+			t.Fatalf("expected 1 top-level entry, got %+v", file.body)
+		}
+		parent := file.body.entries[0]
+		if parent.body == nil || len(parent.body.entries) != 1 {
+			t.Fatalf("expected 1 child entry in block, got %+v", parent.body)
+		}
+		child := parent.body.entries[0]
+		if child.blankBefore != true {
+			t.Errorf("child.blankBefore = %v, want true", child.blankBefore)
+		}
+	})
+
+	t.Run("comment_without_blank_line", func(t *testing.T) {
+		src := `@lkal "0.1"
+
+parent {
+  ### nested comment
+  child = 1
+}
+`
+		file := parserMustParse(t, "nested_comment_no_blank.lkal", src)
+		if file.body == nil || len(file.body.entries) != 1 {
+			t.Fatalf("expected 1 top-level entry, got %+v", file.body)
+		}
+		parent := file.body.entries[0]
+		if parent.body == nil || len(parent.body.entries) != 1 {
+			t.Fatalf("expected 1 child entry in block, got %+v", parent.body)
+		}
+		child := parent.body.entries[0]
+		if len(child.comments) != 1 {
+			t.Fatalf("expected 1 comment attached to child, got %d", len(child.comments))
+		}
+		if child.comments[0].blankBefore != false {
+			t.Errorf("child comment blankBefore = %v, want false", child.comments[0].blankBefore)
+		}
+	})
+
+	t.Run("comment_with_blank_line", func(t *testing.T) {
+		src := `@lkal "0.1"
+
+parent {
+
+  ### nested comment
+  child = 1
+}
+`
+		file := parserMustParse(t, "nested_comment_with_blank.lkal", src)
+		if file.body == nil || len(file.body.entries) != 1 {
+			t.Fatalf("expected 1 top-level entry, got %+v", file.body)
+		}
+		parent := file.body.entries[0]
+		if parent.body == nil || len(parent.body.entries) != 1 {
+			t.Fatalf("expected 1 child entry in block, got %+v", parent.body)
+		}
+		child := parent.body.entries[0]
+		if len(child.comments) != 1 {
+			t.Fatalf("expected 1 comment attached to child, got %d", len(child.comments))
+		}
+		if child.comments[0].blankBefore != true {
+			t.Errorf("child comment blankBefore = %v, want true", child.comments[0].blankBefore)
+		}
+	})
+
+	t.Run("trailing_comment_without_blank_line", func(t *testing.T) {
+		src := `@lkal "0.1"
+
+parent {
+  ### trailing comment
+}
+`
+		file := parserMustParse(t, "nested_trailing_no_blank.lkal", src)
+		if file.body == nil || len(file.body.entries) != 1 {
+			t.Fatalf("expected 1 top-level entry, got %+v", file.body)
+		}
+		parent := file.body.entries[0]
+		if parent.body == nil {
+			t.Fatalf("parent body is nil")
+		}
+		if len(parent.body.trailing) != 1 {
+			t.Fatalf("expected 1 trailing comment in block, got %d", len(parent.body.trailing))
+		}
+		if parent.body.trailing[0].blankBefore != false {
+			t.Errorf("trailing comment blankBefore = %v, want false", parent.body.trailing[0].blankBefore)
+		}
+	})
+
+	t.Run("trailing_comment_with_blank_line", func(t *testing.T) {
+		src := `@lkal "0.1"
+
+parent {
+
+  ### trailing comment
+}
+`
+		file := parserMustParse(t, "nested_trailing_with_blank.lkal", src)
+		if file.body == nil || len(file.body.entries) != 1 {
+			t.Fatalf("expected 1 top-level entry, got %+v", file.body)
+		}
+		parent := file.body.entries[0]
+		if parent.body == nil {
+			t.Fatalf("parent body is nil")
+		}
+		if len(parent.body.trailing) != 1 {
+			t.Fatalf("expected 1 trailing comment in block, got %d", len(parent.body.trailing))
+		}
+		if parent.body.trailing[0].blankBefore != true {
+			t.Errorf("trailing comment blankBefore = %v, want true", parent.body.trailing[0].blankBefore)
+		}
+	})
+}
+
 func TestParse_Errors(t *testing.T) {
 	t.Run("spec_error_rendering", func(t *testing.T) {
 		src := `@lkal "0.1"

@@ -70,6 +70,37 @@ func errCheckSingle(t *testing.T, err error, wantCode string, wantPos Pos, wantM
 	errAssertError(t, single, wantCode, wantPos, wantMsg, wantHint, checkNonEmptyHint)
 }
 
+type expectedError struct {
+	code string
+	line int
+	col  int
+}
+
+func assertExactErrors(t *testing.T, name, src string, want []expectedError) {
+	t.Helper()
+	file, err := Parse(name, []byte(src))
+	if err == nil {
+		t.Fatalf("Parse(%q) succeeded unexpectedly, want %d error(s)", name, len(want))
+	}
+	if file != nil {
+		t.Errorf("Parse(%q) returned non-nil File on error: %v", name, file)
+	}
+	errList, ok := err.(*ErrorList)
+	if !ok {
+		t.Fatalf("Parse(%q) returned error of type %T, want *ErrorList", name, err)
+	}
+	if len(errList.Errors) != len(want) {
+		t.Fatalf("Parse(%q) returned %d error(s), want %d:\ngot:\n%s", name, len(errList.Errors), len(want), errList.Error())
+	}
+	for i, w := range want {
+		got := errList.Errors[i]
+		if got.Code != w.code || got.Pos.Line != w.line || got.Pos.Col != w.col {
+			t.Errorf("Parse(%q) error[%d] mismatch: got %s at %d:%d, want %s at %d:%d",
+				name, i, got.Code, got.Pos.Line, got.Pos.Col, w.code, w.line, w.col)
+		}
+	}
+}
+
 func TestErrorRendering(t *testing.T) {
 	t.Run("ErrorWithoutHint", func(t *testing.T) {
 		err := &Error{
@@ -760,6 +791,92 @@ func TestSyntaxRecovery(t *testing.T) {
 	})
 }
 
+func TestMultilineAssignBlockRecoveryReportsSingleError(t *testing.T) {
+	src := `@lkal "0.1"
+a = {
+  b = 1
+}
+`
+	assertExactErrors(t, "multiline_assign_block.lkal", src, []expectedError{
+		{code: "L106", line: 2, col: 5},
+	})
+}
+
+func TestInterruptedMultilineRawStringReportsSingleError(t *testing.T) {
+	src := `@lkal "0.1"
+a =
+  \\one
+
+  \\two
+  \\three
+`
+	assertExactErrors(t, "interrupted_multiline_raw.lkal", src, []expectedError{
+		{code: "L104", line: 5, col: 3},
+	})
+}
+
+func TestNestedBlockRecoveryResumesTopLevel(t *testing.T) {
+	src := `@lkal "0.1"
+a {
+  b = 1 2
+}
+c = x
+`
+	assertExactErrors(t, "nested_recovery_resume.lkal", src, []expectedError{
+		{code: "L106", line: 3, col: 9},
+		{code: "L102", line: 5, col: 5},
+	})
+}
+
+func TestSemanticErrorsPreservedBeforeUnclosedBlock(t *testing.T) {
+	src := `@lkal "0.1"
+x = 1
+x = 2
+a {
+`
+	assertExactErrors(t, "unclosed_block_semantic_preserved.lkal", src, []expectedError{
+		{code: "L201", line: 3, col: 1},
+		{code: "L103", line: 4, col: 3},
+	})
+}
+
+func TestListRecoveryPreservesSubsequentEntry(t *testing.T) {
+	src := `@lkal "0.1"
+a = [1 2]
+b = x
+`
+	assertExactErrors(t, "list_recovery_preserves_subsequent.lkal", src, []expectedError{
+		{code: "L106", line: 2, col: 8},
+		{code: "L102", line: 3, col: 5},
+	})
+}
+
+func TestKindMixingRepeatedReportsConflictingKind(t *testing.T) {
+	t.Run("element_assign_element", func(t *testing.T) {
+		src := `@lkal "0.1"
+a "x" {}
+a = 1
+a "y" {}
+`
+		assertExactErrors(t, "kind_mixing_elem_assign_elem.lkal", src, []expectedError{
+			{code: "L202", line: 3, col: 1},
+			{code: "L202", line: 4, col: 1},
+		})
+	})
+
+	t.Run("record_element_record", func(t *testing.T) {
+		src := `@lkal "0.1"
+a {}
+a "x" {}
+a {}
+`
+		assertExactErrors(t, "kind_mixing_record_elem_record.lkal", src, []expectedError{
+			{code: "L202", line: 3, col: 1},
+			{code: "L202", line: 4, col: 1},
+		})
+	})
+}
+
 func TestLexicalSuppression(t *testing.T) {
 	tests := []errTestCase{
 		{
@@ -859,6 +976,84 @@ func TestLexicalSuppression(t *testing.T) {
 				t.Fatalf("expected error, got file: %v", file)
 			}
 			errCheckSingle(t, err, tt.wantCode, tt.wantPos, tt.wantMsg, tt.wantHint, tt.checkNonEmptyHint)
+		})
+	}
+}
+
+func TestInitialBOMProducesOnlyLexicalError(t *testing.T) {
+	src := "\xEF\xBB\xBF@lkal \"0.1\"\na = 1\n"
+	assertExactErrors(t, "initial_bom.lkal", src, []expectedError{
+		{code: "L008", line: 1, col: 1},
+	})
+}
+
+func TestIllegalTokenSuppressesParserErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []expectedError
+	}{
+		{
+			name: "version_value_illegal_character",
+			src:  "@lkal ;\n",
+			want: []expectedError{
+				{code: "L008", line: 1, col: 7},
+			},
+		},
+		{
+			name: "version_value_unclosed_string",
+			src:  "@lkal \"0.1\n",
+			want: []expectedError{
+				{code: "L007", line: 1, col: 7},
+			},
+		},
+		{
+			name: "version_trailer",
+			src:  "@lkal \"0.1\" ;\n",
+			want: []expectedError{
+				{code: "L008", line: 1, col: 13},
+			},
+		},
+		{
+			name: "key_trailer",
+			src:  "@lkal \"0.1\"\na ;\n",
+			want: []expectedError{
+				{code: "L008", line: 2, col: 3},
+			},
+		},
+		{
+			name: "label_trailer",
+			src:  "@lkal \"0.1\"\na \"lbl\" ;\n",
+			want: []expectedError{
+				{code: "L008", line: 2, col: 9},
+			},
+		},
+		{
+			name: "value_separator",
+			src:  "@lkal \"0.1\"\na = 1 ;\n",
+			want: []expectedError{
+				{code: "L008", line: 2, col: 7},
+			},
+		},
+		{
+			name: "block_separator",
+			src:  "@lkal \"0.1\"\na {} ;\n",
+			want: []expectedError{
+				{code: "L008", line: 2, col: 6},
+			},
+		},
+		{
+			name: "list_separator",
+			src:  "@lkal \"0.1\"\na = [1 ;]\n",
+			want: []expectedError{
+				{code: "L008", line: 2, col: 8},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertExactErrors(t, tc.name+".lkal", tc.src, tc.want)
 		})
 	}
 }
