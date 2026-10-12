@@ -1,0 +1,12 @@
+{
+  "$lkal": "0.1",
+  "protocol": {
+    "$enum": "tcp"
+  },
+  "method": {
+    "$enum": "http_get"
+  },
+  "status": {
+    "$enum": "PENDING"
+  }
+}

@@ -1,0 +1,16 @@
+@lkal "0.1"
+
+service "web" {
+  port "http" {
+    number = 80
+  }
+  port "https" {
+    number = 443
+  }
+}
+
+service "db" {
+  port "pg" {
+    number = 5432
+  }
+}

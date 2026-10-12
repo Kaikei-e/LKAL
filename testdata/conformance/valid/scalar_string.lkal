@@ -1,0 +1,5 @@
+@lkal "0.1"
+
+plain = "hello world"
+escaped = "quote: \" backslash: \\ newline: \n return: \r tab: \t unicode: \u{1f600}"
+empty = ""

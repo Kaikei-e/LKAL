@@ -1,0 +1,6 @@
+{
+  "$lkal": "0.1",
+  "plain": "hello world",
+  "escaped": "quote: \" backslash: \\ newline: \n return: \r tab: \t unicode: \ud83d\ude00",
+  "empty": ""
+}

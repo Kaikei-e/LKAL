@@ -1,0 +1,28 @@
+{
+  "$lkal": "0.1",
+  "service": {
+    "$coll": {
+      "web": {
+        "port": {
+          "$coll": {
+            "http": {
+              "number": 80
+            },
+            "https": {
+              "number": 443
+            }
+          }
+        }
+      },
+      "db": {
+        "port": {
+          "$coll": {
+            "pg": {
+              "number": 5432
+            }
+          }
+        }
+      }
+    }
+  }
+}

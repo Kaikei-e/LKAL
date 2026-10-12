@@ -1,0 +1,5 @@
+@lkal "0.1"
+
+protocol = .tcp
+method = .http_get
+status = .PENDING

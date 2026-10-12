@@ -1,0 +1,20 @@
+@lkal "0.1"
+
+empty {}
+
+flat {
+  key1 = "val1"
+  key2 = 2
+}
+
+nested {
+  child {
+    grandchild {
+      leaf = true
+    }
+  }
+}
+
+quoted_key {
+  "foo.bar/baz" = 42
+}

@@ -1,0 +1,27 @@
+{
+  "$lkal": "0.1",
+  "simple": {
+    "$ref": "secret/db-creds"
+  },
+  "deep": {
+    "$ref": "service/web/container/app"
+  },
+  "quoted": {
+    "$ref": "labels/\"app.kubernetes.io/name\""
+  },
+  "dotted": {
+    "$ref": "config/file.yaml"
+  },
+  "spaced": {
+    "$ref": "secret/\"db creds\""
+  },
+  "esc": {
+    "$ref": "a/\"x\\\"y\""
+  },
+  "amp": {
+    "$ref": "a/\"b&c\""
+  },
+  "requoted": {
+    "$ref": "a/b"
+  }
+}

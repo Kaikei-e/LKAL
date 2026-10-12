@@ -1,0 +1,14 @@
+{
+  "$lkal": "0.1",
+  "int_zero": 0,
+  "dec_trail": 1.5,
+  "dec_whole": 2.0,
+  "dec_zero": 0.0,
+  "dec_neg_trail": -0.5,
+  "qty_dec": {
+    "$qty": "1.5Gi"
+  },
+  "qty_zero": {
+    "$qty": "0Mi"
+  }
+}

@@ -1,0 +1,10 @@
+@lkal "0.1"
+
+simple = &secret/db-creds
+deep = &service/web/container/app
+quoted = &labels/"app.kubernetes.io/name"
+dotted = &config/file.yaml
+spaced = &secret/"db creds"
+esc = &a/"x\"y"
+amp = &a/"b&c"
+requoted = &a/"b"

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to host agents (Claude Code or Codex) when working with code in this repository.
 
 ## Repository status
 
@@ -14,7 +14,9 @@ ADRs live in `docs/ADR/` and are validated with DocDag v0.5 (`docdag.yaml`). Cre
 
 The `agy_orch` MCP server (batch + fetch enabled) is configured in the gitignored `.mcp.json`. The workflow is in `docs/ADR/0003-*.md`. In short:
 
-- Claude Code decomposes work into task packets and reviews diffs; agy workers implement.
-- `antigravity_batch` requires a clean tree (untracked files count) and workers see only committed files, so paste the relevant spec sections into each packet.
+- Host (Claude Code or Codex) is orchestration-only (no Go code editing): decomposes work into task packets and reviews diffs; agy workers implement.
+- `antigravity_batch` requires a clean tree (untracked files count) and workers see only committed files. Task packets paste relevant `docs/internal/agy` contracts (`00-common` and `10-api` mandatory), while workers read the gitignored full spec directly from an explicit absolute read-only host-checkout path; never copy or commit the private spec (do not put personal absolute paths in tracked documents).
+- Workflow uses two main batches (RED tests/stubs, GREEN implementation) plus bounded repair followups if review/gates demand it. Separate RED and GREEN commits, no push.
+- Review: Opus review can be a Claude subagent or a read-only agy-hosted Opus run.
 - Batch workers run in temp worktrees outside agy's trusted workspaces: keep them to file edits only and let gates run `go test` / `go vet` / `gofmt`.
 - Worker model: `worker: {tier: "reasoning", model: "gemini-3.8-flash-high"}`.
