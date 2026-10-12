@@ -2,6 +2,7 @@ package lkal
 
 import (
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1011,6 +1012,50 @@ parent {
 	})
 }
 
+func TestBlankBeforeAroundCommas(t *testing.T) {
+	t.Run("blank_line_before_leading_comma", func(t *testing.T) {
+		src := "@lkal \"0.1\"\na = 1\n\n, b = 2\n"
+		f := parserMustParse(t, "blank_line_before_leading_comma.lkal", src)
+		if f.body == nil || len(f.body.entries) != 2 {
+			t.Fatalf("expected 2 entries in body, got %+v", f.body)
+		}
+		if f.body.entries[1].key != "b" {
+			t.Fatalf("f.body.entries[1].key = %q, want %q", f.body.entries[1].key, "b")
+		}
+		if got := f.body.entries[1].blankBefore; got != true {
+			t.Errorf("f.body.entries[1].blankBefore = %v, want true", got)
+		}
+	})
+
+	t.Run("comma_only_line", func(t *testing.T) {
+		src := "@lkal \"0.1\"\na = 1\n,\nb = 2\n"
+		f := parserMustParse(t, "comma_only_line.lkal", src)
+		if f.body == nil || len(f.body.entries) != 2 {
+			t.Fatalf("expected 2 entries in body, got %+v", f.body)
+		}
+		if f.body.entries[1].key != "b" {
+			t.Fatalf("f.body.entries[1].key = %q, want %q", f.body.entries[1].key, "b")
+		}
+		if got := f.body.entries[1].blankBefore; got != false {
+			t.Errorf("f.body.entries[1].blankBefore = %v, want false", got)
+		}
+	})
+
+	t.Run("same_line_comma", func(t *testing.T) {
+		src := "@lkal \"0.1\"\na = 1, b = 2\n"
+		f := parserMustParse(t, "same_line_comma.lkal", src)
+		if f.body == nil || len(f.body.entries) != 2 {
+			t.Fatalf("expected 2 entries in body, got %+v", f.body)
+		}
+		if f.body.entries[1].key != "b" {
+			t.Fatalf("f.body.entries[1].key = %q, want %q", f.body.entries[1].key, "b")
+		}
+		if got := f.body.entries[1].blankBefore; got != false {
+			t.Errorf("f.body.entries[1].blankBefore = %v, want false", got)
+		}
+	})
+}
+
 func TestParse_Errors(t *testing.T) {
 	t.Run("spec_error_rendering", func(t *testing.T) {
 		src := `@lkal "0.1"
@@ -1311,7 +1356,8 @@ func TestParseScalesLinearly(t *testing.T) {
 
 	measureMin := func(src []byte) time.Duration {
 		var minDur time.Duration
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 3; i++ {
+			runtime.GC()
 			start := time.Now()
 			_, _ = Parse("scale.lkal", src)
 			d := time.Since(start)
@@ -1328,34 +1374,55 @@ func TestParseScalesLinearly(t *testing.T) {
 		repeat string
 		suffix string
 		baseK  int
+		build  func(k int) []byte
 	}{
 		{
 			name:   "long_valid_line",
 			prefix: "@lkal \"0.1\"\na = [",
 			repeat: "1, ",
 			suffix: "1]\n",
-			baseK:  20000,
+			baseK:  174762,
 		},
 		{
 			name:   "long_line_illegal_characters",
 			prefix: "@lkal \"0.1\"\na = ",
 			repeat: "%",
 			suffix: "\n",
-			baseK:  60000,
+			baseK:  524288,
 		},
 		{
 			name:   "failed_entry_skip_long_block",
 			prefix: "@lkal \"0.1\"\na {\n  = 1\n",
 			repeat: "  b = 1\n",
 			suffix: "}\nc = 1\n",
-			baseK:  7500,
+			baseK:  65536,
+		},
+		{
+			name:   "many_sibling_blocks",
+			prefix: "@lkal \"0.1\"\nr {\n",
+			repeat: "b { x = 1 }\n",
+			suffix: "}\n",
+			baseK:  65536,
+		},
+		{
+			name:  "deep_nesting",
+			baseK: 5000,
+			build: func(k int) []byte {
+				return []byte("@lkal \"0.1\"\na = 1\n" + strings.Repeat("a { ", k) + "x = 1" + strings.Repeat(" }", k) + "\n")
+			},
 		},
 	}
 
 	for _, fam := range families {
 		t.Run(fam.name, func(t *testing.T) {
-			inputN := buildInput(fam.prefix, fam.repeat, fam.suffix, fam.baseK)
-			input4N := buildInput(fam.prefix, fam.repeat, fam.suffix, fam.baseK*4)
+			var inputN, input4N []byte
+			if fam.build != nil {
+				inputN = fam.build(fam.baseK)
+				input4N = fam.build(fam.baseK * 4)
+			} else {
+				inputN = buildInput(fam.prefix, fam.repeat, fam.suffix, fam.baseK)
+				input4N = buildInput(fam.prefix, fam.repeat, fam.suffix, fam.baseK*4)
+			}
 
 			durN := measureMin(inputN)
 			dur4N := measureMin(input4N)
