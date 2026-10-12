@@ -4,7 +4,14 @@ This file provides guidance to host agents (Claude Code or Codex) when working w
 
 ## Repository status
 
-LKAL is a declarative data format with a Go implementation (standard library only). The spec draft v0.1 lives in `docs/internal/` and is gitignored, so it never appears in commits or in agy batch worktrees. No Go code exists yet; the first milestone is the core library defined in `docs/ADR/0001-*.md`.
+LKAL is a declarative data format with a Go implementation (standard library only). The spec draft v0.1 lives in `docs/internal/` and is gitignored, so it never appears in commits or in agy batch worktrees. The foundation scope is implemented: lexer, parser, AST, data model, semantic validation, error reporting, and Equal. Format, production JSON, path operations, and CLI remain outside this milestone.
+
+## Verification commands
+
+- `go test ./...`
+- `go test -run TestX ./...`
+- `go vet ./...`
+- `go test -run '^$' -fuzz=FuzzParse -fuzztime=30s -parallel=2`
 
 ## Decision records
 

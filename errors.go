@@ -1,6 +1,9 @@
 package lkal
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 type Pos struct {
 	Line int
@@ -20,7 +23,11 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return ""
+	s := e.File + ":" + e.Pos.String() + ": " + e.Code + " " + e.Msg
+	if e.Hint != "" {
+		s += "\n  hint: " + e.Hint
+	}
+	return s
 }
 
 type ErrorList struct {
@@ -28,7 +35,17 @@ type ErrorList struct {
 }
 
 func (l *ErrorList) Error() string {
-	return ""
+	if len(l.Errors) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, err := range l.Errors {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(err.Error())
+	}
+	return b.String()
 }
 
 var errorMessages = map[string]string{
