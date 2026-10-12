@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func parserMustParse(t *testing.T, name, src string) *File {
@@ -1297,4 +1298,77 @@ port =    tcp
 			}
 		}
 	})
+}
+
+func TestParseScalesLinearly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping scaling test in short mode")
+	}
+
+	buildInput := func(prefix, repeat, suffix string, k int) []byte {
+		return []byte(prefix + strings.Repeat(repeat, k) + suffix)
+	}
+
+	measureMin := func(src []byte) time.Duration {
+		var minDur time.Duration
+		for i := 0; i < 5; i++ {
+			start := time.Now()
+			_, _ = Parse("scale.lkal", src)
+			d := time.Since(start)
+			if i == 0 || d < minDur {
+				minDur = d
+			}
+		}
+		return minDur
+	}
+
+	families := []struct {
+		name   string
+		prefix string
+		repeat string
+		suffix string
+		baseK  int
+	}{
+		{
+			name:   "long_valid_line",
+			prefix: "@lkal \"0.1\"\na = [",
+			repeat: "1, ",
+			suffix: "1]\n",
+			baseK:  20000,
+		},
+		{
+			name:   "long_line_illegal_characters",
+			prefix: "@lkal \"0.1\"\na = ",
+			repeat: "%",
+			suffix: "\n",
+			baseK:  60000,
+		},
+		{
+			name:   "failed_entry_skip_long_block",
+			prefix: "@lkal \"0.1\"\na {\n  = 1\n",
+			repeat: "  b = 1\n",
+			suffix: "}\nc = 1\n",
+			baseK:  7500,
+		},
+	}
+
+	for _, fam := range families {
+		t.Run(fam.name, func(t *testing.T) {
+			inputN := buildInput(fam.prefix, fam.repeat, fam.suffix, fam.baseK)
+			input4N := buildInput(fam.prefix, fam.repeat, fam.suffix, fam.baseK*4)
+
+			durN := measureMin(inputN)
+			dur4N := measureMin(input4N)
+
+			if dur4N > 8*durN {
+				ratio := float64(dur4N)
+				if durN > 0 {
+					ratio /= float64(durN)
+					t.Errorf("%s: 4n duration %v exceeds 8x n duration %v (ratio: %.2fx)", fam.name, dur4N, durN, ratio)
+				} else {
+					t.Errorf("%s: 4n duration %v exceeds 8x n duration %v", fam.name, dur4N, durN)
+				}
+			}
+		})
+	}
 }

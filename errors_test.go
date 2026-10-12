@@ -1265,6 +1265,48 @@ func TestRecoveryRules(t *testing.T) {
 				{code: "L009", line: 2, col: 5},
 			},
 		},
+		{
+			name: "entry_with_l002_skips_list_element_type_check",
+			src:  "@lkal \"0.1\"\na = [\n### c\n1, \"x\"]\n",
+			want: []expectedError{
+				{code: "L002", line: 3, col: 1},
+			},
+		},
+		{
+			name: "entry_with_l002_not_added_to_ast_skips_duplicate_key_check",
+			src:  "@lkal \"0.1\"\na = 1\na = [\n### c\n1]\n",
+			want: []expectedError{
+				{code: "L002", line: 4, col: 1},
+			},
+		},
+		{
+			name: "recovery_ignores_mismatched_bracket_in_block",
+			src:  "@lkal \"0.1\"\na {\n]\nb = 1\n}\n",
+			want: []expectedError{
+				{code: "L106", line: 3, col: 1},
+			},
+		},
+		{
+			name: "recovery_ignores_mismatched_brace_in_list",
+			src:  "@lkal \"0.1\"\na = [\n}\n1]\n",
+			want: []expectedError{
+				{code: "L106", line: 3, col: 1},
+			},
+		},
+		{
+			name: "recovery_ignores_mismatched_bracket_after_value_in_block",
+			src:  "@lkal \"0.1\"\na {\n b = 1 ]\n c = 2\n}\n",
+			want: []expectedError{
+				{code: "L106", line: 3, col: 8},
+			},
+		},
+		{
+			name: "syntax_error_after_value_suppresses_semantic_check",
+			src:  "@lkal \"0.1\"\na = [1, \"x\"] }\n",
+			want: []expectedError{
+				{code: "L106", line: 2, col: 14},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -1345,6 +1387,13 @@ func TestStrayRawStrings(t *testing.T) {
 			want: []expectedError{
 				{code: "L106", line: 4, col: 1},
 				{code: "L106", line: 6, col: 1},
+			},
+		},
+		{
+			name: "comma_line_between_raw_values_yields_l106",
+			src:  "@lkal \"0.1\"\na =\n\\\\x\n,\n\\\\y\n",
+			want: []expectedError{
+				{code: "L106", line: 5, col: 1},
 			},
 		},
 	}
@@ -1574,6 +1623,13 @@ func TestUnexpectedTokenHints(t *testing.T) {
 			line:     1,
 			col:      13,
 			wantHint: "版の宣言の後ろは改行する",
+		},
+		{
+			name:     "closing_brace_after_top_level_value",
+			src:      "@lkal \"0.1\"\na = [1, \"x\"] }\n",
+			line:     2,
+			col:      14,
+			wantHint: "項目の間は改行かカンマで区切る",
 		},
 	}
 
