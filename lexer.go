@@ -1,435 +1,224 @@
 package lkal
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
+var symbolTokens = [256]tokKind{
+	'=': tokAssign,
+	'{': tokLBrace,
+	'}': tokRBrace,
+	'[': tokLBrack,
+	']': tokRBrack,
+	',': tokComma,
+}
+
+type scanResult struct {
+	kind    tokKind
+	length  int
+	text    string
+	segs    []string
+	errCode string
+	errOff  int
+}
+
+func (r *scanResult) setErr(code string, off int) {
+	if r.errCode == "" {
+		r.errCode = code
+		r.errOff = off
+	}
+}
+
 func lex(name string, src []byte) ([]token, []*Error) {
 	var tokens []token
 	var errs []*Error
 
-	var lines [][]byte
-	var terminators []string
-	start := 0
-	numLFs := 0
-	for {
-		idx := -1
-		for j := start; j < len(src); j++ {
-			if src[j] == '\n' {
-				idx = j
-				break
-			}
-		}
-		if idx == -1 {
-			lines = append(lines, src[start:])
-			terminators = append(terminators, "")
-			break
-		}
-		numLFs++
-		if idx > start && src[idx-1] == '\r' {
-			lines = append(lines, src[start:idx-1])
-			terminators = append(terminators, "\r\n")
-		} else {
-			lines = append(lines, src[start:idx])
-			terminators = append(terminators, "\n")
-		}
-		start = idx + 1
+	startCol := 1
+	if bytes.HasPrefix(src, []byte("\xef\xbb\xbf")) {
+		errs = append(errs, newError(name, Pos{Line: 1, Col: 1}, "L008", ""))
+		src = src[3:]
+		startCol = 2
 	}
 
-	for lineIdx, lineBytes := range lines {
-		lineNum := lineIdx + 1
-		term := terminators[lineIdx]
-		hasLF := term != ""
-
-		if lineIdx == len(lines)-1 && !hasLF && len(lineBytes) == 0 && lineIdx > 0 {
-			break
+	lineNum := 1
+	eofPos := Pos{Line: 1, Col: startCol}
+	for len(src) > 0 {
+		var line []byte
+		term := ""
+		idx := bytes.IndexByte(src, '\n')
+		if idx >= 0 {
+			term = "\n"
+			if idx > 0 && src[idx-1] == '\r' {
+				line = src[:idx-1]
+				term = "\r\n"
+			} else {
+				line = src[:idx]
+			}
+			src = src[idx+1:]
+		} else {
+			line = src
+			src = nil
 		}
 
-		col := 1
-		rem := lineBytes
+		cols := lineCols(line, startCol)
+		lineTokens, lineErrs := lexLine(name, lineNum, cols, line)
+		tokens = append(tokens, lineTokens...)
+		errs = append(errs, lineErrs...)
 
-		if lineNum == 1 && len(rem) >= 3 && rem[0] == 0xef && rem[1] == 0xbb && rem[2] == 0xbf {
-			errs = append(errs, lexNewError(name, Pos{Line: 1, Col: 1}, "L008"))
-			tokens = append(tokens, token{
-				kind: tokIllegal,
-				pos:  Pos{Line: 1, Col: 1},
-				lit:  string(rem[:3]),
-				text: "",
-			})
-			col++
-			rem = rem[3:]
-		}
-
-		for len(rem) > 0 && (rem[0] == ' ' || rem[0] == '\t') {
-			col++
-			rem = rem[1:]
-		}
-
-		if len(rem) > 0 {
-			if rem[0] == '#' {
-				hashCount := 0
-				for hashCount < len(rem) && rem[hashCount] == '#' {
-					hashCount++
-				}
-				if hashCount >= 3 {
-					tokLit := string(rem)
-					tokText := lexCommentText(string(rem[3:]))
-					tokens = append(tokens, token{
-						kind: tokComment,
-						pos:  Pos{Line: lineNum, Col: col},
-						lit:  tokLit,
-						text: tokText,
-					})
-					errs = append(errs, lexCheckCommentOrRawInvalidChars(name, lineNum, col, rem)...)
-				} else {
-					errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: col}, "L001"))
-					tokLit := string(rem)
-					tokText := lexCommentText(string(rem[hashCount:]))
-					tokens = append(tokens, token{
-						kind: tokComment,
-						pos:  Pos{Line: lineNum, Col: col},
-						lit:  tokLit,
-						text: tokText,
-					})
-					errs = append(errs, lexCheckCommentOrRawInvalidChars(name, lineNum, col, rem)...)
-				}
-				rem = nil
-			} else if len(rem) >= 2 && rem[0] == '\\' && rem[1] == '\\' {
-				tokLit := string(rem)
-				tokText := string(rem[2:])
-				tokens = append(tokens, token{
-					kind: tokRawLine,
-					pos:  Pos{Line: lineNum, Col: col},
-					lit:  tokLit,
-					text: tokText,
-				})
-				errs = append(errs, lexCheckCommentOrRawInvalidChars(name, lineNum, col, rem)...)
-				rem = nil
-			} else if rem[0] == '@' {
-				dirCol := col
-				if len(rem) > 1 && lexIsNameStart(rem[1]) {
-					k := 1
-					for k < len(rem) && lexIsNameChar(rem[k]) {
-						k++
-					}
-					nameStr := string(rem[1:k])
-					fullLit := string(rem[:k])
-					col += k
-					rem = rem[k:]
-					if nameStr == "lkal" {
-						tokens = append(tokens, token{
-							kind: tokDirective,
-							pos:  Pos{Line: lineNum, Col: dirCol},
-							lit:  fullLit,
-							text: "lkal",
-						})
-					} else {
-						errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: dirCol}, "L006"))
-						tokens = append(tokens, token{
-							kind: tokIllegal,
-							pos:  Pos{Line: lineNum, Col: dirCol},
-							lit:  fullLit,
-							text: "",
-						})
-					}
-				} else {
-					errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: dirCol}, "L009"))
-					k := 0
-					for k < len(rem) && !lexIsDelimiter(rem[k]) {
-						k++
-					}
-					runLit := string(rem[:k])
-					col += lexCountCodePoints(rem[:k])
-					rem = rem[k:]
-					tokens = append(tokens, token{
-						kind: tokIllegal,
-						pos:  Pos{Line: lineNum, Col: dirCol},
-						lit:  runLit,
-						text: "",
-					})
-				}
-			}
-		}
-
-		for len(rem) > 0 {
-			if rem[0] == ' ' || rem[0] == '\t' {
-				col++
-				rem = rem[1:]
-				continue
-			}
-
-			if rem[0] == '#' {
-				errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: col}, "L002"))
-				break
-			}
-
-			if rem[0] == '"' {
-				litStr, decodedStr, strErr, consumed, cp := lexScanString(name, lineNum, col, rem)
-				if strErr != nil {
-					errs = append(errs, strErr)
-					tokens = append(tokens, token{
-						kind: tokIllegal,
-						pos:  Pos{Line: lineNum, Col: col},
-						lit:  litStr,
-						text: "",
-					})
-				} else {
-					tokens = append(tokens, token{
-						kind: tokString,
-						pos:  Pos{Line: lineNum, Col: col},
-						lit:  litStr,
-						text: decodedStr,
-					})
-				}
-				col += cp
-				rem = rem[consumed:]
-				continue
-			}
-
-			if (rem[0] >= '0' && rem[0] <= '9') || rem[0] == '-' {
-				numStartCol := col
-				k := 0
-				for k < len(rem) && !lexIsDelimiter(rem[k]) {
-					k++
-				}
-				runBytes := rem[:k]
-				runLit := string(runBytes)
-				numKind, numErr := lexValidateNumber(runLit)
-				if numErr != "" {
-					errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: numStartCol}, numErr))
-					tokens = append(tokens, token{
-						kind: tokIllegal,
-						pos:  Pos{Line: lineNum, Col: numStartCol},
-						lit:  runLit,
-						text: "",
-					})
-				} else {
-					tokens = append(tokens, token{
-						kind: numKind,
-						pos:  Pos{Line: lineNum, Col: numStartCol},
-						lit:  runLit,
-						text: runLit,
-					})
-				}
-				col += lexCountCodePoints(runBytes)
-				rem = rem[k:]
-				continue
-			}
-
-			if rem[0] == '=' {
-				tokens = append(tokens, token{kind: tokAssign, pos: Pos{Line: lineNum, Col: col}, lit: "=", text: ""})
-				col++
-				rem = rem[1:]
-				continue
-			}
-			if rem[0] == '{' {
-				tokens = append(tokens, token{kind: tokLBrace, pos: Pos{Line: lineNum, Col: col}, lit: "{", text: ""})
-				col++
-				rem = rem[1:]
-				continue
-			}
-			if rem[0] == '}' {
-				tokens = append(tokens, token{kind: tokRBrace, pos: Pos{Line: lineNum, Col: col}, lit: "}", text: ""})
-				col++
-				rem = rem[1:]
-				continue
-			}
-			if rem[0] == '[' {
-				tokens = append(tokens, token{kind: tokLBrack, pos: Pos{Line: lineNum, Col: col}, lit: "[", text: ""})
-				col++
-				rem = rem[1:]
-				continue
-			}
-			if rem[0] == ']' {
-				tokens = append(tokens, token{kind: tokRBrack, pos: Pos{Line: lineNum, Col: col}, lit: "]", text: ""})
-				col++
-				rem = rem[1:]
-				continue
-			}
-			if rem[0] == ',' {
-				tokens = append(tokens, token{kind: tokComma, pos: Pos{Line: lineNum, Col: col}, lit: ",", text: ""})
-				col++
-				rem = rem[1:]
-				continue
-			}
-
-			if lexIsNameStart(rem[0]) {
-				k := 0
-				for k < len(rem) && lexIsNameChar(rem[k]) {
-					k++
-				}
-				nameLit := string(rem[:k])
-				if nameLit == "true" || nameLit == "false" {
-					tokens = append(tokens, token{
-						kind: tokBool,
-						pos:  Pos{Line: lineNum, Col: col},
-						lit:  nameLit,
-						text: nameLit,
-					})
-				} else {
-					tokens = append(tokens, token{
-						kind: tokName,
-						pos:  Pos{Line: lineNum, Col: col},
-						lit:  nameLit,
-						text: nameLit,
-					})
-				}
-				col += k
-				rem = rem[k:]
-				continue
-			}
-
-			if rem[0] == '.' {
-				enumStartCol := col
-				if len(rem) >= 2 && lexIsNameStart(rem[1]) {
-					k := 2
-					for k < len(rem) && lexIsNameChar(rem[k]) {
-						k++
-					}
-					runLit := string(rem[:k])
-					tokens = append(tokens, token{
-						kind: tokEnum,
-						pos:  Pos{Line: lineNum, Col: enumStartCol},
-						lit:  runLit,
-						text: runLit[1:],
-					})
-					col += k
-					rem = rem[k:]
-					continue
-				}
-
-				errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: enumStartCol}, "L009"))
-				k := 0
-				for k < len(rem) && !lexIsDelimiter(rem[k]) {
-					k++
-				}
-				runBytes := rem[:k]
-				runLit := string(runBytes)
-				tokens = append(tokens, token{
-					kind: tokIllegal,
-					pos:  Pos{Line: lineNum, Col: enumStartCol},
-					lit:  runLit,
-					text: "",
-				})
-				col += lexCountCodePoints(runBytes)
-				rem = rem[k:]
-				continue
-			}
-
-			if rem[0] == '&' {
-				refTok, refErr, consumed, cp := lexScanRef(name, lineNum, col, rem)
-				if refErr != nil {
-					errs = append(errs, refErr)
-				}
-				tokens = append(tokens, refTok)
-				col += cp
-				rem = rem[consumed:]
-				continue
-			}
-
-			if rem[0] == '\r' {
-				errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: col}, "L008"))
-				tokens = append(tokens, token{
-					kind: tokIllegal,
-					pos:  Pos{Line: lineNum, Col: col},
-					lit:  "\r",
-					text: "",
-				})
-				col++
-				rem = rem[1:]
-				continue
-			}
-
-			if rem[0] == '@' {
-				errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: col}, "L008"))
-				tokens = append(tokens, token{
-					kind: tokIllegal,
-					pos:  Pos{Line: lineNum, Col: col},
-					lit:  "@",
-					text: "",
-				})
-				col++
-				rem = rem[1:]
-				continue
-			}
-
-			if rem[0] == '\\' {
-				errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: col}, "L008"))
-				tokens = append(tokens, token{
-					kind: tokIllegal,
-					pos:  Pos{Line: lineNum, Col: col},
-					lit:  "\\",
-					text: "",
-				})
-				col++
-				rem = rem[1:]
-				continue
-			}
-
-			_, sz := utf8.DecodeRune(rem)
-			errs = append(errs, lexNewError(name, Pos{Line: lineNum, Col: col}, "L008"))
-			tokens = append(tokens, token{
-				kind: tokIllegal,
-				pos:  Pos{Line: lineNum, Col: col},
-				lit:  string(rem[:sz]),
-				text: "",
-			})
-			col++
-			rem = rem[sz:]
-		}
-
-		if hasLF {
-			newlineCol := 1 + lexCountCodePoints(lineBytes)
+		if term != "" {
 			tokens = append(tokens, token{
 				kind: tokNewline,
-				pos:  Pos{Line: lineNum, Col: newlineCol},
+				pos:  Pos{Line: lineNum, Col: cols[len(line)]},
 				lit:  term,
-				text: "",
 			})
+			eofPos = Pos{Line: lineNum + 1, Col: 1}
+		} else {
+			eofPos = Pos{Line: lineNum, Col: cols[len(line)]}
 		}
+
+		lineNum++
+		startCol = 1
 	}
 
-	eofLine := numLFs + 1
-	eofCol := 1 + lexCountCodePoints(lines[len(lines)-1])
 	tokens = append(tokens, token{
 		kind: tokEOF,
-		pos:  Pos{Line: eofLine, Col: eofCol},
-		lit:  "",
-		text: "",
+		pos:  eofPos,
 	})
 
 	return tokens, errs
 }
 
-func lexNewError(file string, pos Pos, code string) *Error {
-	return &Error{
-		File: file,
-		Pos:  pos,
-		Code: code,
-		Msg:  errorMessages[code],
-		Hint: errorHints[code],
+func lineCols(line []byte, startCol int) []int {
+	cols := make([]int, len(line)+1)
+	col := startCol
+	for off := 0; off < len(line); {
+		cols[off] = col
+		_, sz := utf8.DecodeRune(line[off:])
+		for j := 1; j < sz; j++ {
+			cols[off+j] = col
+		}
+		col++
+		off += sz
 	}
+	cols[len(line)] = col
+	return cols
 }
 
-func lexCountCodePoints(b []byte) int {
-	n := 0
-	for len(b) > 0 {
-		_, sz := utf8.DecodeRune(b)
-		n++
-		b = b[sz:]
+func lexScanDirective(src []byte, off int) scanResult {
+	if off+1 < len(src) && lexIsNameStart(src[off+1]) {
+		nameRes := lexScanName(src, off+1)
+		totalLen := 1 + nameRes.length
+		if nameRes.text == "lkal" {
+			return scanResult{kind: tokDirective, length: totalLen, text: "lkal"}
+		}
+		return scanResult{kind: tokIllegal, length: totalLen, errCode: "L006", errOff: off}
 	}
-	return n
+	return scanResult{kind: tokIllegal, length: lexDelimiterRun(src, off), errCode: "L009", errOff: off}
+}
+
+func lexScanComment(src []byte, off int) scanResult {
+	hashCount := 0
+	for off+hashCount < len(src) && src[off+hashCount] == '#' {
+		hashCount++
+	}
+	cut := hashCount
+	if cut > 3 {
+		cut = 3
+	}
+	var res scanResult
+	res.kind = tokComment
+	res.length = len(src) - off
+	res.text = lexCommentText(string(src[off+cut:]))
+	if hashCount < 3 {
+		res.setErr("L001", off)
+	}
+	return res
+}
+
+func lexLine(file string, lineNum int, cols []int, line []byte) ([]token, []*Error) {
+	var tokens []token
+	var errs []*Error
+
+	first := 0
+	for first < len(line) && (line[first] == ' ' || line[first] == '\t') {
+		first++
+	}
+
+	cursor := 0
+	for cursor < len(line) {
+		b := line[cursor]
+		if b == ' ' || b == '\t' {
+			cursor++
+			continue
+		}
+		atStart := (cursor == first)
+
+		var res scanResult
+
+		switch {
+		case b == '#' && atStart:
+			res = lexScanComment(line, cursor)
+
+		case b == '#' && !atStart:
+			errs = append(errs, newError(file, Pos{Line: lineNum, Col: cols[cursor]}, "L002", ""))
+			return tokens, errs
+
+		case b == '\\' && atStart && len(line)-cursor >= 2 && line[cursor+1] == '\\':
+			res = scanResult{kind: tokRawLine, length: len(line) - cursor, text: string(line[cursor+2:])}
+
+		case b == '@' && atStart:
+			res = lexScanDirective(line, cursor)
+
+		case b == '@' && !atStart:
+			res = scanResult{kind: tokIllegal, length: 1, errCode: "L008", errOff: cursor}
+
+		case b == '"':
+			res = lexScanString(line, cursor)
+
+		case (b >= '0' && b <= '9') || b == '-':
+			res = lexScanNumber(line, cursor)
+
+		case symbolTokens[b] != 0:
+			res = scanResult{kind: symbolTokens[b], length: 1}
+
+		case b == '.':
+			res = lexScanEnum(line, cursor)
+
+		case b == '&':
+			res = lexScanRef(line, cursor)
+
+		case lexIsNameStart(b):
+			res = lexScanName(line, cursor)
+
+		default:
+			_, sz := utf8.DecodeRune(line[cursor:])
+			res = scanResult{kind: tokIllegal, length: sz, errCode: "L008", errOff: cursor}
+		}
+
+		tokens = append(tokens, token{
+			kind: res.kind,
+			pos:  Pos{Line: lineNum, Col: cols[cursor]},
+			lit:  string(line[cursor : cursor+res.length]),
+			text: res.text,
+			segs: res.segs,
+		})
+		if res.errCode != "" {
+			errs = append(errs, newError(file, Pos{Line: lineNum, Col: cols[res.errOff]}, res.errCode, ""))
+		}
+		if res.kind == tokComment || res.kind == tokRawLine {
+			errs = append(errs, lexCheckCommentOrRawInvalidChars(file, lineNum, cols, line, cursor)...)
+		}
+		cursor += res.length
+	}
+
+	return tokens, errs
 }
 
 func lexIsDelimiter(b byte) bool {
-	switch b {
-	case ' ', '\t', '=', '{', '}', '[', ']', ',', '"', '#':
-		return true
-	default:
-		return false
-	}
+	return b == ' ' || b == '\t' || b == '"' || b == '#' || symbolTokens[b] != 0
 }
 
 func lexIsNameStart(b byte) bool {
@@ -455,42 +244,30 @@ func lexCommentText(rawAfterHashes string) string {
 	return strings.TrimRight(rawAfterHashes, " \t")
 }
 
-func lexCheckCommentOrRawInvalidChars(file string, lineNum, startCol int, b []byte) []*Error {
+func lexCheckCommentOrRawInvalidChars(file string, lineNum int, cols []int, line []byte, off int) []*Error {
 	var errs []*Error
-	currCol := startCol
-	for len(b) > 0 {
-		if b[0] == '\r' {
-			errs = append(errs, lexNewError(file, Pos{Line: lineNum, Col: currCol}, "L008"))
-			currCol++
-			b = b[1:]
+	for i := off; i < len(line); {
+		if line[i] == '\r' {
+			errs = append(errs, newError(file, Pos{Line: lineNum, Col: cols[i]}, "L008", ""))
+			i++
 			continue
 		}
-		r, sz := utf8.DecodeRune(b)
+		r, sz := utf8.DecodeRune(line[i:])
 		if r == utf8.RuneError && sz == 1 {
-			errs = append(errs, lexNewError(file, Pos{Line: lineNum, Col: currCol}, "L008"))
-			currCol++
-			b = b[1:]
-			continue
+			errs = append(errs, newError(file, Pos{Line: lineNum, Col: cols[i]}, "L008", ""))
 		}
-		currCol++
-		b = b[sz:]
+		i += sz
 	}
 	return errs
 }
 
 func lexValidateNumber(run string) (tokKind, string) {
 	s := run
-	if len(s) == 0 {
-		return tokIllegal, "L009"
-	}
-
 	if s[0] == '-' {
 		s = s[1:]
 		if len(s) == 0 || s[0] < '0' || s[0] > '9' {
 			return tokIllegal, "L009"
 		}
-	} else if s[0] < '0' || s[0] > '9' {
-		return tokIllegal, "L009"
 	}
 
 	var intDigits string
@@ -561,220 +338,180 @@ func lexValidateNumber(run string) (tokKind, string) {
 	return tokDecimal, ""
 }
 
-func lexScanString(file string, lineNum, startCol int, src []byte) (string, string, *Error, int, int) {
-	var litBuilder strings.Builder
-	var decoded strings.Builder
-	var firstErr *Error
+func lexDelimiterRun(src []byte, off int) int {
+	k := off
+	for k < len(src) && !lexIsDelimiter(src[k]) {
+		k++
+	}
+	return k - off
+}
 
-	litBuilder.WriteByte('"')
-	i := 1
-	currCol := startCol + 1
+func lexScanName(src []byte, off int) scanResult {
+	k := off + 1
+	for k < len(src) && lexIsNameChar(src[k]) {
+		k++
+	}
+	text := string(src[off:k])
+	kind := tokName
+	if text == "true" || text == "false" {
+		kind = tokBool
+	}
+	return scanResult{kind: kind, length: k - off, text: text}
+}
+
+func lexScanNumber(src []byte, off int) scanResult {
+	length := lexDelimiterRun(src, off)
+	run := string(src[off : off+length])
+	kind, errCode := lexValidateNumber(run)
+	if errCode != "" {
+		return scanResult{kind: tokIllegal, length: length, errCode: errCode, errOff: off}
+	}
+	return scanResult{kind: kind, length: length, text: run}
+}
+
+func lexScanEnum(src []byte, off int) scanResult {
+	if off+1 < len(src) && lexIsNameStart(src[off+1]) {
+		nameRes := lexScanName(src, off+1)
+		return scanResult{kind: tokEnum, length: 1 + nameRes.length, text: nameRes.text}
+	}
+	return scanResult{kind: tokIllegal, length: lexDelimiterRun(src, off), errCode: "L009", errOff: off}
+}
+
+func lexScanString(src []byte, off int) scanResult {
+	var res scanResult
+	var decoded strings.Builder
+
+	i := off + 1
 	closed := false
 
 	for i < len(src) {
 		if src[i] == '"' {
 			closed = true
-			litBuilder.WriteByte('"')
-			currCol++
 			i++
 			break
 		}
 		if src[i] == '\\' {
-			backslashCol := currCol
-			litBuilder.WriteByte('\\')
-			currCol++
+			backslashOff := i
 			i++
 			if i >= len(src) {
 				break
 			}
 			switch src[i] {
 			case '"':
-				litBuilder.WriteByte('"')
 				decoded.WriteByte('"')
-				currCol++
 				i++
 			case '\\':
-				litBuilder.WriteByte('\\')
 				decoded.WriteByte('\\')
-				currCol++
 				i++
 			case 'n':
-				litBuilder.WriteByte('n')
 				decoded.WriteByte('\n')
-				currCol++
 				i++
 			case 'r':
-				litBuilder.WriteByte('r')
 				decoded.WriteByte('\r')
-				currCol++
 				i++
 			case 't':
-				litBuilder.WriteByte('t')
 				decoded.WriteByte('\t')
-				currCol++
 				i++
 			case 'u':
-				litBuilder.WriteByte('u')
-				currCol++
 				i++
 				if i < len(src) && src[i] == '{' {
-					litBuilder.WriteByte('{')
-					currCol++
 					i++
 					hexStart := i
 					for i < len(src) && isHexDigit(src[i]) {
-						litBuilder.WriteByte(src[i])
-						currCol++
 						i++
 					}
 					if i < len(src) && src[i] == '}' {
-						litBuilder.WriteByte('}')
-						currCol++
 						hexStr := string(src[hexStart:i])
 						i++
 						val, err := strconv.ParseUint(hexStr, 16, 32)
-						if err != nil || len(hexStr) < 1 || len(hexStr) > 6 || val > 0x10FFFF || (val >= 0xD800 && val <= 0xDFFF) {
-							if firstErr == nil {
-								firstErr = lexNewError(file, Pos{Line: lineNum, Col: backslashCol}, "L003")
-							}
+						if err != nil || len(hexStr) > 6 || val > 0x10FFFF || (val >= 0xD800 && val <= 0xDFFF) {
+							res.setErr("L003", backslashOff)
 						} else {
 							decoded.WriteRune(rune(val))
 						}
 					} else {
-						if firstErr == nil {
-							firstErr = lexNewError(file, Pos{Line: lineNum, Col: backslashCol}, "L003")
-						}
+						res.setErr("L003", backslashOff)
 					}
 				} else {
-					if firstErr == nil {
-						firstErr = lexNewError(file, Pos{Line: lineNum, Col: backslashCol}, "L003")
-					}
+					res.setErr("L003", backslashOff)
 				}
 			default:
 				_, sz := utf8.DecodeRune(src[i:])
-				litBuilder.WriteString(string(src[i : i+sz]))
-				currCol++
 				i += sz
-				if firstErr == nil {
-					firstErr = lexNewError(file, Pos{Line: lineNum, Col: backslashCol}, "L003")
-				}
+				res.setErr("L003", backslashOff)
 			}
 			continue
 		}
 
 		r, sz := utf8.DecodeRune(src[i:])
 		if r == utf8.RuneError && sz == 1 {
-			litBuilder.WriteByte(src[i])
-			if firstErr == nil {
-				firstErr = lexNewError(file, Pos{Line: lineNum, Col: currCol}, "L008")
-			}
-			currCol++
+			res.setErr("L008", i)
 			i++
 			continue
 		}
 		if (r < 0x20 && r != '\t') || r == 0x7f {
-			litBuilder.WriteString(string(src[i : i+sz]))
-			if firstErr == nil {
-				firstErr = lexNewError(file, Pos{Line: lineNum, Col: currCol}, "L008")
-			}
-			currCol++
+			res.setErr("L008", i)
 			i += sz
 			continue
 		}
 
-		litBuilder.WriteString(string(src[i : i+sz]))
 		decoded.WriteRune(r)
-		currCol++
 		i += sz
 	}
 
 	if !closed {
-		firstErr = lexNewError(file, Pos{Line: lineNum, Col: startCol}, "L007")
+		res.errCode = "L007"
+		res.errOff = off
 	}
 
-	return litBuilder.String(), decoded.String(), firstErr, i, currCol - startCol
+	res.length = i - off
+	if res.errCode != "" {
+		res.kind = tokIllegal
+		res.text = ""
+	} else {
+		res.kind = tokString
+		res.text = decoded.String()
+	}
+	return res
 }
 
-func lexScanRef(file string, lineNum, startCol int, src []byte) (token, *Error, int, int) {
-	i := 1
-	currCol := startCol + 1
+func lexScanRef(src []byte, off int) scanResult {
+	var res scanResult
+	i := off + 1
 	var segs []string
-	var firstErr *Error
-	hasError := false
-	segCount := 0
 
 	for {
-		if i >= len(src) {
-			break
-		}
-		if src[i] != '"' && lexIsDelimiter(src[i]) {
-			break
-		}
-
-		if src[i] == '/' {
-			hasError = true
-			i++
-			currCol++
-			continue
-		}
-
-		if src[i] == '"' {
-			_, decodedStr, strErr, consumed, cp := lexScanString(file, lineNum, currCol, src[i:])
-			segCount++
-			segs = append(segs, decodedStr)
-			if strErr != nil {
-				hasError = true
-				if firstErr == nil {
-					firstErr = strErr
-				}
+		if i < len(src) && src[i] == '"' {
+			strRes := lexScanString(src, i)
+			segs = append(segs, strRes.text)
+			if strRes.errCode != "" {
+				res.setErr(strRes.errCode, strRes.errOff)
 			}
-			i += consumed
-			currCol += cp
-		} else if lexIsRefSegmentChar(src[i]) {
-			segStart := i
+			i += strRes.length
+		} else if i < len(src) && lexIsRefSegmentChar(src[i]) {
+			start := i
 			for i < len(src) && lexIsRefSegmentChar(src[i]) {
-				currCol++
 				i++
 			}
-			segLit := string(src[segStart:i])
-			segCount++
-			segs = append(segs, segLit)
+			segs = append(segs, string(src[start:i]))
 		} else {
-			break
+			res.setErr("L009", off)
 		}
 
 		if i < len(src) && src[i] == '/' {
 			i++
-			currCol++
-			if i >= len(src) || (!lexIsRefSegmentChar(src[i]) && src[i] != '"' && src[i] != '/') {
-				hasError = true
-				break
-			}
-		} else {
-			break
+			continue
 		}
+		break
 	}
 
-	fullLit := string(src[:i])
-	if segCount == 0 || hasError {
-		if firstErr == nil {
-			firstErr = lexNewError(file, Pos{Line: lineNum, Col: startCol}, "L009")
-		}
-		tok := token{
-			kind: tokIllegal,
-			pos:  Pos{Line: lineNum, Col: startCol},
-			lit:  fullLit,
-			text: "",
-		}
-		return tok, firstErr, i, currCol - startCol
+	res.length = i - off
+	if res.errCode != "" {
+		res.kind = tokIllegal
+		return res
 	}
-
-	tok := token{
-		kind: tokRef,
-		pos:  Pos{Line: lineNum, Col: startCol},
-		lit:  fullLit,
-		text: string(src[1:i]),
-		segs: segs,
-	}
-	return tok, nil, i, currCol - startCol
+	res.kind = tokRef
+	res.text = string(src[off+1 : i])
+	res.segs = segs
+	return res
 }

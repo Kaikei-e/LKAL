@@ -52,9 +52,6 @@ type scalarNode struct {
 }
 
 func (n *scalarNode) nodePos() Pos {
-	if n == nil {
-		return Pos{}
-	}
 	return n.tok.pos
 }
 
@@ -66,9 +63,6 @@ type listNode struct {
 }
 
 func (n *listNode) nodePos() Pos {
-	if n == nil {
-		return Pos{}
-	}
 	return n.lbrack
 }
 
@@ -78,8 +72,5 @@ type rawNode struct {
 }
 
 func (n *rawNode) nodePos() Pos {
-	if n == nil {
-		return Pos{}
-	}
 	return n.pos
 }

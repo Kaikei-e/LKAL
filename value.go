@@ -1,5 +1,7 @@
 package lkal
 
+import "slices"
+
 type Value interface {
 	lkalValue()
 }
@@ -63,15 +65,7 @@ func Equal(a, b Value) bool {
 		return ok && va == vb
 	case Ref:
 		vb, ok := b.(Ref)
-		if !ok || len(va) != len(vb) {
-			return false
-		}
-		for i := range va {
-			if va[i] != vb[i] {
-				return false
-			}
-		}
-		return true
+		return ok && slices.Equal(va, vb)
 	case List:
 		vb, ok := b.(List)
 		if !ok || len(va) != len(vb) {
@@ -85,51 +79,36 @@ func Equal(a, b Value) bool {
 		return true
 	case Record:
 		vb, ok := b.(Record)
-		if !ok || len(va.Fields) != len(vb.Fields) {
-			return false
-		}
-		if len(va.Fields) == 0 {
-			return true
-		}
-		used := make([]bool, len(vb.Fields))
-		for _, fa := range va.Fields {
-			found := false
-			for j, fb := range vb.Fields {
-				if !used[j] && fa.Key == fb.Key && Equal(fa.Value, fb.Value) {
-					used[j] = true
-					found = true
-					break
-				}
-			}
-			if !found {
-				return false
-			}
-		}
-		return true
+		return ok && matchUnordered(len(va.Fields), len(vb.Fields), func(i, j int) bool {
+			return va.Fields[i].Key == vb.Fields[j].Key && Equal(va.Fields[i].Value, vb.Fields[j].Value)
+		})
 	case Collection:
 		vb, ok := b.(Collection)
-		if !ok || len(va.Elems) != len(vb.Elems) {
-			return false
-		}
-		if len(va.Elems) == 0 {
-			return true
-		}
-		used := make([]bool, len(vb.Elems))
-		for _, ea := range va.Elems {
-			found := false
-			for j, eb := range vb.Elems {
-				if !used[j] && ea.Label == eb.Label && Equal(ea.Body, eb.Body) {
-					used[j] = true
-					found = true
-					break
-				}
-			}
-			if !found {
-				return false
-			}
-		}
-		return true
+		return ok && matchUnordered(len(va.Elems), len(vb.Elems), func(i, j int) bool {
+			return va.Elems[i].Label == vb.Elems[j].Label && Equal(va.Elems[i].Body, vb.Elems[j].Body)
+		})
 	default:
 		return false
 	}
+}
+
+func matchUnordered(n, m int, same func(i, j int) bool) bool {
+	if n != m {
+		return false
+	}
+	used := make([]bool, m)
+	for i := 0; i < n; i++ {
+		found := false
+		for j := 0; j < m; j++ {
+			if !used[j] && same(i, j) {
+				used[j] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

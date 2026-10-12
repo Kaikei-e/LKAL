@@ -1,6 +1,7 @@
 package lkal
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -88,7 +89,7 @@ var errorHints = map[string]string{
 	"L103": "対応する閉じ括弧を書く",
 	"L104": `間を詰める。空の行は \\ だけの行で書く`,
 	"L105": `先頭に @lkal "0.1" を1回だけ書く`,
-	"L106": "構文を見直す",
+	"L106": "項目は キー = 値、キー { … }、キー \"ラベル\" { … } のどれかで始める",
 	"L201": "片方を消す",
 	"L202": "代入・レコード・コレクションのどれか1種類にそろえる",
 	"L203": "要素をまとめて書く",
@@ -96,4 +97,33 @@ var errorHints = map[string]string{
 	"L205": "キー名を変える",
 	"L206": `key "label" { … } のようにブロックで書く`,
 	"L207": `このバージョンが受け付けるのは "0.1" だけ`,
+}
+
+func newError(file string, pos Pos, code, hint string) *Error {
+	if hint == "" {
+		hint = errorHints[code]
+	}
+	return &Error{
+		File: file,
+		Pos:  pos,
+		Code: code,
+		Msg:  errorMessages[code],
+		Hint: hint,
+	}
+}
+
+func sortErrors(errs []*Error) []*Error {
+	sort.SliceStable(errs, func(i, j int) bool {
+		if errs[i].Pos.Line != errs[j].Pos.Line {
+			return errs[i].Pos.Line < errs[j].Pos.Line
+		}
+		if errs[i].Pos.Col != errs[j].Pos.Col {
+			return errs[i].Pos.Col < errs[j].Pos.Col
+		}
+		return errs[i].Code < errs[j].Code
+	})
+	if len(errs) > 20 {
+		return errs[:20]
+	}
+	return errs
 }

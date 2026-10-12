@@ -2,7 +2,6 @@ package lkal
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -14,190 +13,138 @@ func Parse(name string, src []byte) (*File, error) {
 		tokens: tokens,
 	}
 
-	file, ok := p.parseVersion(name)
-	if ok && p.peek().kind != tokEOF {
-		file.body, _ = p.parseBlock(true)
-	} else if file.body == nil {
-		file.body = &block{}
-	}
-
-	p.validateBlock(file.body)
+	file := &File{name: name}
+	p.parseHeader(file)
+	file.body = p.parseFileBody()
 
 	allErrors := append(lexErrs, p.errors...)
+	allErrors = append(allErrors, validate(p.file, file.body)...)
 	if len(allErrors) > 0 {
-		sort.SliceStable(allErrors, func(i, j int) bool {
-			if allErrors[i].Pos.Line != allErrors[j].Pos.Line {
-				return allErrors[i].Pos.Line < allErrors[j].Pos.Line
-			}
-			if allErrors[i].Pos.Col != allErrors[j].Pos.Col {
-				return allErrors[i].Pos.Col < allErrors[j].Pos.Col
-			}
-			return allErrors[i].Code < allErrors[j].Code
-		})
-		if len(allErrors) > 20 {
-			allErrors = allErrors[:20]
-		}
-		return nil, &ErrorList{Errors: allErrors}
+		return nil, &ErrorList{Errors: sortErrors(allErrors)}
 	}
 
 	return file, nil
 }
 
 func (f *File) Version() string {
-	if f == nil {
-		return ""
-	}
 	return f.version
 }
 
 func (f *File) Data() Record {
-	if f == nil || f.body == nil {
-		return Record{}
-	}
 	return buildRecord(f.body)
 }
 
-type bracketInfo struct {
-	pos     Pos
-	isBrace bool
-}
-
 type parser struct {
-	file         string
-	tokens       []token
-	pos          int
-	errors       []*Error
-	topError     bool
-	bracketStack []bracketInfo
+	file     string
+	tokens   []token
+	pos      int
+	errors   []*Error
+	brackets []token
 }
 
 func (p *parser) peek() token {
-	if p.pos < len(p.tokens) {
-		return p.tokens[p.pos]
-	}
-	if len(p.tokens) > 0 {
-		return p.tokens[len(p.tokens)-1]
-	}
-	return token{kind: tokEOF, pos: Pos{Line: 1, Col: 1}}
+	return p.tokens[p.pos]
 }
 
 func (p *parser) peekNext() token {
-	if p.pos+1 < len(p.tokens) {
-		return p.tokens[p.pos+1]
-	}
-	if len(p.tokens) > 0 {
-		return p.tokens[len(p.tokens)-1]
-	}
-	return token{kind: tokEOF, pos: Pos{Line: 1, Col: 1}}
+	return p.tokens[p.pos+1]
 }
 
 func (p *parser) next() token {
-	tok := p.peek()
-	if p.pos < len(p.tokens) {
-		p.pos++
-	}
+	tok := p.tokens[p.pos]
+	p.pos++
 	return tok
 }
 
 func (p *parser) skipNewlines() token {
-	for p.pos < len(p.tokens) && p.tokens[p.pos].kind == tokNewline {
+	for p.peek().kind == tokNewline {
 		p.pos++
 	}
 	return p.peek()
 }
 
-func (p *parser) pushBracket(pos Pos, isBrace bool) {
-	p.bracketStack = append(p.bracketStack, bracketInfo{pos: pos, isBrace: isBrace})
-}
-
-func (p *parser) popBracket() {
-	if len(p.bracketStack) > 0 {
-		p.bracketStack = p.bracketStack[:len(p.bracketStack)-1]
-	}
-}
-
-func (p *parser) reportInnermostL103() {
-	if len(p.bracketStack) > 0 {
-		top := p.bracketStack[len(p.bracketStack)-1]
-		p.errors = append(p.errors, parseNewError(p.file, top.pos, "L103", ""))
-		p.bracketStack = nil
-	}
-}
-
-func (p *parser) syntaxError(pos Pos, code, hint string) {
-	if p.topError {
+func (p *parser) syntaxError(tok token, code, hint string) {
+	if tok.kind == tokIllegal {
 		return
 	}
-	p.errors = append(p.errors, parseNewError(p.file, pos, code, hint))
-	if code != "L103" {
-		p.topError = true
+	if tok.kind == tokEOF && len(p.brackets) > 0 {
+		b := p.brackets[len(p.brackets)-1]
+		p.errors = append(p.errors, newError(p.file, b.pos, "L103", ""))
+		return
+	}
+	p.errors = append(p.errors, newError(p.file, tok.pos, code, hint))
+}
+
+func (p *parser) track(tok token) {
+	switch tok.kind {
+	case tokLBrace, tokLBrack:
+		p.brackets = append(p.brackets, tok)
+	case tokRBrace:
+		if len(p.brackets) > 0 && p.brackets[len(p.brackets)-1].kind == tokLBrace {
+			p.brackets = p.brackets[:len(p.brackets)-1]
+		}
+	case tokRBrack:
+		if len(p.brackets) > 0 && p.brackets[len(p.brackets)-1].kind == tokLBrack {
+			p.brackets = p.brackets[:len(p.brackets)-1]
+		}
 	}
 }
 
-func isBOM(tok token) bool {
-	return tok.kind == tokIllegal && tok.pos.Line == 1 && tok.pos.Col == 1 && tok.lit == "\xef\xbb\xbf"
+func (p *parser) recover() {
+	for p.peek().kind != tokEOF {
+		tok := p.next()
+		p.track(tok)
+		if tok.kind == tokNewline && len(p.brackets) == 0 {
+			break
+		}
+	}
+	p.brackets = nil
 }
 
-func (p *parser) consumeRawRun() {
-	p.next()
-	for p.pos < len(p.tokens) {
-		if p.peek().kind == tokNewline && p.peekNext().kind == tokRawLine {
+type bodyState struct {
+	comments         []comment
+	newlines         int
+	blank            bool
+	prevWasRawAssign bool
+}
+
+func (p *parser) advanceTrivia(s *bodyState) {
+	for {
+		tok := p.peek()
+		switch tok.kind {
+		case tokNewline:
 			p.next()
+			s.newlines++
+			s.blank = s.newlines >= 2
+		case tokComma:
 			p.next()
-		} else {
-			break
+			s.newlines = 0
+			s.prevWasRawAssign = false
+		case tokComment:
+			p.next()
+			s.comments = append(s.comments, comment{
+				pos:         tok.pos,
+				text:        tok.text,
+				blankBefore: s.blank,
+			})
+			s.newlines = 0
+			s.blank = false
+		default:
+			return
 		}
 	}
 }
 
-func (p *parser) recoverTopLevel() {
-	depth := 0
-	for _, b := range p.bracketStack {
-		if b.isBrace {
-			depth++
-		}
-	}
-	p.bracketStack = nil
-
-	for p.pos < len(p.tokens) {
-		tok := p.tokens[p.pos]
-		if tok.kind == tokEOF {
-			break
-		}
-		if tok.kind == tokLBrace {
-			depth++
-			p.pos++
-			continue
-		}
-		if tok.kind == tokRBrace {
-			if depth > 0 {
-				depth--
-			}
-			p.pos++
-			continue
-		}
-		if tok.kind == tokNewline && depth == 0 {
-			p.pos++
-			for p.pos < len(p.tokens) && (p.tokens[p.pos].kind == tokNewline || p.tokens[p.pos].kind == tokComma) {
-				p.pos++
-			}
-			break
-		}
-		p.pos++
-	}
+func isRaw(n node) bool {
+	_, ok := n.(*rawNode)
+	return ok
 }
 
-func (p *parser) parseVersion(file string) (*File, bool) {
-	f := &File{name: file}
-	var headComments []comment
+func (p *parser) parseHeader(file *File) {
+	var head []comment
 	newlines := 0
-	hasPrevLine := false
 
-	if p.pos < len(p.tokens) && isBOM(p.peek()) {
-		p.next()
-	}
-
-	for p.pos < len(p.tokens) {
+	for {
 		tok := p.peek()
 		if tok.kind == tokNewline {
 			p.next()
@@ -206,195 +153,143 @@ func (p *parser) parseVersion(file string) (*File, bool) {
 		}
 		if tok.kind == tokComment {
 			p.next()
-			blankBefore := (newlines >= 2) || (!hasPrevLine && newlines >= 1)
-			headComments = append(headComments, comment{
+			head = append(head, comment{
 				pos:         tok.pos,
 				text:        tok.text,
-				blankBefore: blankBefore,
+				blankBefore: (newlines >= 2) || (len(head) == 0 && newlines >= 1),
 			})
 			newlines = 0
-			hasPrevLine = true
 			continue
 		}
 		break
 	}
-	f.head = headComments
+	file.head = head
 
 	tok := p.peek()
-	if tok.kind == tokEOF {
-		p.syntaxError(tok.pos, "L105", "")
-		f.version = "0.1"
-		f.versionPos = tok.pos
-		return f, false
+	file.versionPos = tok.pos
+	if tok.kind != tokDirective {
+		p.syntaxError(tok, "L105", "")
+		return
 	}
 
-	if tok.kind == tokDirective {
-		f.versionPos = tok.pos
+	p.next()
+	valTok := p.peek()
+	if valTok.kind == tokString {
 		p.next()
-
-		valTok := p.peek()
-		if valTok.kind == tokString {
-			f.version = valTok.text
-			if valTok.text != "0.1" {
-				p.errors = append(p.errors, parseNewError(p.file, valTok.pos, "L207", ""))
-			}
-			p.next()
-
-			nxt := p.peek()
-			if nxt.kind != tokNewline && nxt.kind != tokEOF {
-				if nxt.kind != tokIllegal {
-					p.syntaxError(nxt.pos, "L106", "版の宣言の後ろには改行が必要")
-				}
-				for p.pos < len(p.tokens) && p.tokens[p.pos].kind != tokNewline && p.tokens[p.pos].kind != tokEOF {
-					p.pos++
-				}
-			}
-			return f, true
+		file.version = valTok.text
+		if valTok.text != "0.1" {
+			p.errors = append(p.errors, newError(p.file, valTok.pos, "L207", ""))
 		}
-
-		if valTok.kind != tokIllegal {
-			p.syntaxError(valTok.pos, "L105", "")
+		tok = p.peek()
+		if tok.kind == tokNewline || tok.kind == tokEOF {
+			return
 		}
-		f.version = "0.1"
-		for p.pos < len(p.tokens) && p.tokens[p.pos].kind != tokNewline && p.tokens[p.pos].kind != tokEOF {
-			p.pos++
-		}
-		return f, true
+		p.syntaxError(tok, "L106", "版の宣言の後ろは改行する")
+	} else {
+		tok = valTok
+		p.syntaxError(tok, "L105", "")
 	}
 
-	if tok.kind == tokIllegal && strings.HasPrefix(tok.lit, "@") {
-		f.versionPos = tok.pos
-		f.version = "0.1"
-		for p.pos < len(p.tokens) && p.tokens[p.pos].kind != tokNewline && p.tokens[p.pos].kind != tokEOF {
-			p.pos++
-		}
-		return f, true
+	if tok.kind != tokNewline && tok.kind != tokEOF {
+		p.recover()
 	}
-
-	if tok.kind != tokIllegal {
-		p.syntaxError(tok.pos, "L105", "")
-	}
-	f.version = "0.1"
-	f.versionPos = tok.pos
-	return f, true
 }
 
-func (p *parser) parseBlock(isTopLevel bool) (*block, bool) {
-	blk := &block{}
+func (p *parser) parseFileBody() *block {
 	var entries []*entry
-	var pendingComments []comment
-	newlines := 0
-	hasPrevLine := true
-	prevWasRaw := false
+	var s bodyState
 
-	defer func() {
-		blk.entries = entries
-		blk.trailing = pendingComments
-	}()
-
-	for p.pos < len(p.tokens) {
-		tok := p.peek()
-
-		if tok.kind == tokNewline {
-			p.next()
-			newlines++
-			continue
-		}
-
-		if tok.kind == tokComma {
-			p.next()
-			continue
-		}
-
-		if tok.kind == tokComment {
-			p.next()
-			blankBefore := (newlines >= 2) || (!hasPrevLine && newlines >= 1)
-			pendingComments = append(pendingComments, comment{
-				pos:         tok.pos,
-				text:        tok.text,
-				blankBefore: blankBefore,
-			})
-			newlines = 0
-			hasPrevLine = true
-			continue
-		}
-
-		if tok.kind == tokEOF {
+	for {
+		p.advanceTrivia(&s)
+		if p.peek().kind == tokEOF {
 			break
 		}
 
-		if tok.kind == tokRBrace {
-			if !isTopLevel {
-				break
-			}
-			p.syntaxError(tok.pos, "L106", "予期しない閉じ括弧")
-			p.next()
-			p.recoverTopLevel()
-			p.topError = false
+		errCount := len(p.errors)
+		ent, ok := p.parseEntry(s.comments, s.blank, s.prevWasRawAssign)
+		s.comments = nil
+		s.newlines = 0
+		s.blank = false
+
+		if len(p.errors) > errCount+1 {
+			p.errors = p.errors[:errCount+1]
+		}
+		if !ok {
+			s.prevWasRawAssign = false
+			p.recover()
 			continue
 		}
-
-		if isTopLevel {
-			p.topError = false
+		if len(p.errors) == errCount {
+			entries = append(entries, ent)
+			s.prevWasRawAssign = (ent.kind == entryAssign && isRaw(ent.value))
+		} else {
+			s.prevWasRawAssign = false
 		}
-
-		blankBefore := (newlines >= 2) || (!hasPrevLine && newlines >= 1)
-		ent, ok, isRaw := p.parseEntry(pendingComments, blankBefore, prevWasRaw)
-		pendingComments = nil
-		newlines = 0
-		hasPrevLine = true
-		prevWasRaw = isRaw
-
-		if !ok {
-			if isTopLevel {
-				p.recoverTopLevel()
-				p.topError = false
-				prevWasRaw = false
-				continue
-			}
-			return blk, false
-		}
-
-		entries = append(entries, ent)
 	}
 
-	return blk, true
+	return &block{
+		entries:  entries,
+		trailing: s.comments,
+	}
 }
 
-func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRaw bool) (*entry, bool, bool) {
+func (p *parser) parseBracedBlock() (*block, bool) {
+	lbraceTok := p.next()
+	p.track(lbraceTok)
+	var entries []*entry
+	var s bodyState
+
+	for {
+		p.advanceTrivia(&s)
+		if p.peek().kind == tokRBrace {
+			break
+		}
+
+		ent, ok := p.parseEntry(s.comments, s.blank, s.prevWasRawAssign)
+		s.comments = nil
+		s.newlines = 0
+		s.blank = false
+
+		if !ok {
+			return nil, false
+		}
+		entries = append(entries, ent)
+		s.prevWasRawAssign = (ent.kind == entryAssign && isRaw(ent.value))
+	}
+
+	rbraceTok := p.next()
+	p.track(rbraceTok)
+	return &block{
+		entries:  entries,
+		trailing: s.comments,
+		oneLine:  lbraceTok.pos.Line == rbraceTok.pos.Line,
+		lbrace:   lbraceTok.pos,
+		rbrace:   rbraceTok.pos,
+	}, true
+}
+
+func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRawAssign bool) (*entry, bool) {
 	tok := p.peek()
-
 	if tok.kind == tokBool {
-		p.syntaxError(tok.pos, "L106", fmt.Sprintf("予約語をキーにするには %q のように引用符で囲む", tok.lit))
-		return nil, false, false
+		p.syntaxError(tok, "L106", "予約語をキーにするときは引用符で囲む")
+		return nil, false
 	}
-
-	if tok.kind == tokRawLine {
-		if prevWasRaw {
-			p.syntaxError(tok.pos, "L104", "")
-		} else {
-			p.syntaxError(tok.pos, "L106", "複数行文字列は = の後ろに書く")
-		}
-		p.consumeRawRun()
-		return nil, false, false
-	}
-
 	if tok.kind == tokDirective {
-		p.syntaxError(tok.pos, "L105", "")
-		return nil, false, false
+		p.syntaxError(tok, "L105", "")
+		return nil, false
 	}
-
-	if tok.kind == tokIllegal {
-		return nil, false, false
-	}
-
-	if tok.kind != tokName && tok.kind != tokString {
-		hint := "構文を見直す"
-		if tok.kind == tokAssign {
-			hint = "キーの前に = は書けない"
+	if tok.kind == tokRawLine {
+		p.parseRaw()
+		code := "L106"
+		if prevWasRawAssign {
+			code = "L104"
 		}
-		p.syntaxError(tok.pos, "L106", hint)
-		return nil, false, false
+		p.syntaxError(tok, code, "")
+		return nil, false
+	}
+	if tok.kind != tokName && tok.kind != tokString {
+		p.syntaxError(tok, "L106", "")
+		return nil, false
 	}
 
 	keyTok := p.next()
@@ -407,57 +302,31 @@ func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRaw boo
 
 	afterKey := p.peek()
 	if afterKey.kind == tokNewline {
-		p.syntaxError(afterKey.pos, "L101", "")
+		p.syntaxError(afterKey, "L101", "")
 		p.next()
-		return nil, false, false
+		return nil, false
 	}
 
-	if afterKey.kind == tokAssign {
+	switch afterKey.kind {
+	case tokAssign:
 		ent.kind = entryAssign
 		p.next()
-
-		valTok := p.skipNewlines()
-		if valTok.kind == tokComment {
-			p.syntaxError(valTok.pos, "L106", "= と値の間にコメントは書けない")
-			return nil, false, false
-		}
-		if valTok.kind == tokLBrace {
-			p.syntaxError(valTok.pos, "L106", "レコードは key { … } のように = なしで書く")
-			return nil, false, false
-		}
-		if valTok.kind == tokName {
-			p.syntaxError(valTok.pos, "L102", fmt.Sprintf("文字列なら %q、列挙子なら .%s と書く", valTok.text, valTok.text))
-			return nil, false, false
-		}
-		if valTok.kind == tokIllegal {
-			return nil, false, false
-		}
-
-		valNode, ok := p.parseValue(valTok)
+		p.skipNewlines()
+		valNode, ok := p.parseAssignValue()
 		if !ok {
-			return nil, false, false
+			return nil, false
 		}
 		ent.value = valNode
-		_, isRaw := valNode.(*rawNode)
 
-		if !p.checkSeparator() {
-			return nil, false, false
-		}
-		return ent, true, isRaw
-	}
-
-	if afterKey.kind == tokLBrace {
+	case tokLBrace:
 		ent.kind = entryRecord
-		if !p.parseEntryBlock(ent) {
-			return nil, false, false
+		body, ok := p.parseBracedBlock()
+		if !ok {
+			return nil, false
 		}
-		if !p.checkSeparator() {
-			return nil, false, false
-		}
-		return ent, true, false
-	}
+		ent.body = body
 
-	if afterKey.kind == tokString {
+	case tokString:
 		ent.kind = entryElem
 		labelTok := p.next()
 		ent.label = labelTok.text
@@ -465,210 +334,58 @@ func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRaw boo
 
 		afterLabel := p.peek()
 		if afterLabel.kind == tokAssign {
-			p.syntaxError(afterLabel.pos, "L206", "")
-			return nil, false, false
+			p.syntaxError(afterLabel, "L206", "")
+			return nil, false
 		}
 		if afterLabel.kind == tokNewline {
-			p.syntaxError(afterLabel.pos, "L101", "")
+			p.syntaxError(afterLabel, "L101", "")
 			p.next()
-			return nil, false, false
-		}
-		if afterLabel.kind == tokIllegal {
-			return nil, false, false
+			return nil, false
 		}
 		if afterLabel.kind != tokLBrace {
-			p.syntaxError(afterLabel.pos, "L106", "ラベルの後ろには { が必要")
-			return nil, false, false
+			p.syntaxError(afterLabel, "L106", "ラベルの後ろには { を書く")
+			return nil, false
 		}
 
-		if !p.parseEntryBlock(ent) {
-			return nil, false, false
+		body, ok := p.parseBracedBlock()
+		if !ok {
+			return nil, false
 		}
-		if !p.checkSeparator() {
-			return nil, false, false
-		}
-		return ent, true, false
+		ent.body = body
+
+	default:
+		p.syntaxError(afterKey, "L106", "キーの後ろには =、{、\"ラベル\" のどれかを書く")
+		return nil, false
 	}
 
-	if afterKey.kind != tokIllegal {
-		p.syntaxError(afterKey.pos, "L106", "= または { が必要")
+	if !p.checkSeparator() {
+		return nil, false
 	}
-	return nil, false, false
-}
-
-func (p *parser) parseEntryBlock(ent *entry) bool {
-	lbraceTok := p.next()
-	p.pushBracket(lbraceTok.pos, true)
-
-	body, ok := p.parseBlock(false)
-	if !ok {
-		return false
-	}
-	body.lbrace = lbraceTok.pos
-	ent.body = body
-
-	if p.peek().kind == tokRBrace {
-		rbraceTok := p.next()
-		body.rbrace = rbraceTok.pos
-		body.oneLine = (body.lbrace.Line == body.rbrace.Line)
-		p.popBracket()
-		return true
-	}
-	if p.peek().kind == tokEOF {
-		p.reportInnermostL103()
-		return false
-	}
-	if p.peek().kind == tokIllegal {
-		return false
-	}
-	p.syntaxError(p.peek().pos, "L106", "} が必要")
-	return false
+	return ent, true
 }
 
 func (p *parser) checkSeparator() bool {
 	nxt := p.peek()
-	if nxt.kind == tokNewline || nxt.kind == tokComma || nxt.kind == tokRBrace || nxt.kind == tokEOF || nxt.kind == tokComment {
+	if nxt.kind == tokNewline || nxt.kind == tokComma || nxt.kind == tokEOF {
 		return true
 	}
-	if nxt.kind != tokIllegal {
-		p.syntaxError(nxt.pos, "L106", "項目の間は改行かカンマで区切る")
+	if nxt.kind == tokRBrace && len(p.brackets) > 0 && p.brackets[len(p.brackets)-1].kind == tokLBrace {
+		return true
 	}
+	p.syntaxError(nxt, "L106", "項目の間は改行かカンマで区切る")
 	return false
 }
 
-func (p *parser) parseValue(valTok token) (node, bool) {
-	if getScalarKind(valTok.kind) != -1 {
-		p.next()
-		return p.parseScalar(valTok), true
+func isScalar(k tokKind) bool {
+	switch k {
+	case tokString, tokInt, tokDecimal, tokQuantity, tokBool, tokEnum, tokRef:
+		return true
+	default:
+		return false
 	}
-	if valTok.kind == tokLBrack {
-		return p.parseList(valTok)
-	}
-	if valTok.kind == tokRawLine {
-		return p.parseRaw(valTok)
-	}
-	if valTok.kind != tokIllegal {
-		p.syntaxError(valTok.pos, "L106", "値が必要")
-	}
-	return nil, false
 }
 
-func (p *parser) parseRaw(valTok token) (*rawNode, bool) {
-	lines := []string{valTok.text}
-	firstPos := valTok.pos
-	p.next()
-
-	for p.pos < len(p.tokens) {
-		if p.peek().kind == tokNewline && p.peekNext().kind == tokRawLine {
-			p.next()
-			rawTok := p.next()
-			lines = append(lines, rawTok.text)
-		} else {
-			break
-		}
-	}
-	return &rawNode{pos: firstPos, lines: lines}, true
-}
-
-func (p *parser) parseList(lbrackTok token) (*listNode, bool) {
-	p.next()
-	p.pushBracket(lbrackTok.pos, false)
-
-	var elems []*scalarNode
-	firstElemKind := -1
-	reportedL204 := false
-	expectedComma := false
-
-	for p.pos < len(p.tokens) {
-		tok := p.skipNewlines()
-
-		if tok.kind == tokComment {
-			p.next()
-			p.syntaxError(tok.pos, "L002", "")
-			continue
-		}
-
-		if tok.kind == tokRBrack {
-			break
-		}
-
-		if tok.kind == tokEOF {
-			p.reportInnermostL103()
-			return nil, false
-		}
-
-		if expectedComma {
-			if tok.kind == tokComma {
-				p.next()
-				expectedComma = false
-				continue
-			}
-			if tok.kind != tokIllegal {
-				p.syntaxError(tok.pos, "L106", "要素の間にはカンマを書く")
-			}
-			return nil, false
-		}
-
-		if tok.kind == tokLBrack {
-			p.syntaxError(tok.pos, "L106", "リストの中にリストは書けない")
-			return nil, false
-		}
-		if tok.kind == tokLBrace {
-			p.syntaxError(tok.pos, "L106", "リストの中にレコードは書けない")
-			return nil, false
-		}
-		if tok.kind == tokName {
-			p.syntaxError(tok.pos, "L102", fmt.Sprintf("文字列なら %q、列挙子なら .%s と書く", tok.text, tok.text))
-			return nil, false
-		}
-		if tok.kind == tokIllegal {
-			return nil, false
-		}
-
-		sk := getScalarKind(tok.kind)
-		if sk == -1 {
-			p.syntaxError(tok.pos, "L106", "要素にはスカラー値を書く")
-			return nil, false
-		}
-
-		if firstElemKind == -1 {
-			firstElemKind = sk
-		} else if sk != firstElemKind && !reportedL204 {
-			p.errors = append(p.errors, parseNewError(p.file, tok.pos, "L204", ""))
-			reportedL204 = true
-		}
-
-		sn := p.parseScalar(tok)
-		p.next()
-		elems = append(elems, sn)
-		expectedComma = true
-	}
-
-	p.skipNewlines()
-	if p.peek().kind == tokRBrack {
-		rbrackTok := p.next()
-		p.popBracket()
-		oneLine := (lbrackTok.pos.Line == rbrackTok.pos.Line)
-		return &listNode{
-			lbrack:  lbrackTok.pos,
-			rbrack:  rbrackTok.pos,
-			elems:   elems,
-			oneLine: oneLine,
-		}, true
-	}
-
-	if p.peek().kind == tokEOF {
-		p.reportInnermostL103()
-		return nil, false
-	}
-
-	if p.peek().kind != tokIllegal {
-		p.syntaxError(p.peek().pos, "L106", "] が必要")
-	}
-	return nil, false
-}
-
-func (p *parser) parseScalar(tok token) *scalarNode {
+func parseScalar(tok token) *scalarNode {
 	var val Value
 	switch tok.kind {
 	case tokString:
@@ -677,10 +394,10 @@ func (p *parser) parseScalar(tok token) *scalarNode {
 		n, _ := strconv.ParseInt(tok.text, 10, 64)
 		val = Int(n)
 	case tokDecimal:
-		val = Decimal(normalizeDecimal(tok.text))
+		val = Decimal(normalizeNumber(tok.text))
 	case tokQuantity:
 		num, unit := splitQuantity(tok.text)
-		val = Quantity{Number: normalizeQuantityNumber(num), Unit: unit}
+		val = Quantity{Number: normalizeNumber(num), Unit: unit}
 	case tokBool:
 		val = Bool(tok.text == "true")
 	case tokEnum:
@@ -691,108 +408,203 @@ func (p *parser) parseScalar(tok token) *scalarNode {
 	return &scalarNode{tok: tok, val: val}
 }
 
-func (p *parser) validateBlock(b *block) {
-	if b == nil {
-		return
+func (p *parser) parseAssignValue() (node, bool) {
+	tok := p.peek()
+	if tok.kind == tokLBrack {
+		return p.parseList()
 	}
-	seenKindsByKey := make(map[string]map[entryKind]bool)
-	seenKeys := make(map[string]bool)
-	seenLabelsByCollKey := make(map[string]map[string]bool)
+	if tok.kind == tokRawLine {
+		return p.parseRaw(), true
+	}
+	if tok.kind == tokComment {
+		p.syntaxError(tok, "L106", "= と値の間にコメント行は書けない")
+		return nil, false
+	}
+	if tok.kind == tokLBrace {
+		p.syntaxError(tok, "L106", "レコードは = を付けずに key { … } と書く")
+		return nil, false
+	}
+	return p.parseScalarOrError()
+}
+
+func (p *parser) parseListElem() (*scalarNode, bool) {
+	tok := p.peek()
+	if tok.kind == tokLBrack || tok.kind == tokLBrace {
+		p.syntaxError(tok, "L106", "リストの要素にはスカラーだけを書ける")
+		return nil, false
+	}
+	return p.parseScalarOrError()
+}
+
+func (p *parser) parseScalarOrError() (*scalarNode, bool) {
+	tok := p.peek()
+	if isScalar(tok.kind) {
+		p.next()
+		return parseScalar(tok), true
+	}
+	if tok.kind == tokName {
+		p.syntaxError(tok, "L102", fmt.Sprintf("文字列なら %q、列挙子なら .%s と書く", tok.text, tok.text))
+		return nil, false
+	}
+	if tok.kind == tokDirective {
+		p.syntaxError(tok, "L105", "")
+		return nil, false
+	}
+	p.syntaxError(tok, "L106", "値には文字列・数値・量・真偽値・列挙子・参照・リスト・\\\\ 行のどれかを書く")
+	return nil, false
+}
+
+func (p *parser) skipListWhitespace() token {
+	for {
+		tok := p.peek()
+		if tok.kind == tokNewline {
+			p.next()
+			continue
+		}
+		if tok.kind == tokComment {
+			p.syntaxError(tok, "L002", "")
+			p.next()
+			continue
+		}
+		return tok
+	}
+}
+
+func (p *parser) parseList() (*listNode, bool) {
+	lbrackTok := p.next()
+	p.track(lbrackTok)
+	var elems []*scalarNode
+
+	tok := p.skipListWhitespace()
+	if tok.kind != tokRBrack {
+		for {
+			elem, ok := p.parseListElem()
+			if !ok {
+				return nil, false
+			}
+			elems = append(elems, elem)
+
+			sep := p.skipListWhitespace()
+			if sep.kind == tokComma {
+				p.next()
+				if p.skipListWhitespace().kind == tokRBrack {
+					break
+				}
+				continue
+			}
+			if sep.kind == tokRBrack {
+				break
+			}
+			p.syntaxError(sep, "L106", "リストの要素は , で区切る")
+			return nil, false
+		}
+	}
+
+	rbrackTok := p.next()
+	p.track(rbrackTok)
+	return &listNode{
+		lbrack:  lbrackTok.pos,
+		rbrack:  rbrackTok.pos,
+		elems:   elems,
+		oneLine: lbrackTok.pos.Line == rbrackTok.pos.Line,
+	}, true
+}
+
+func (p *parser) parseRaw() *rawNode {
+	firstTok := p.next()
+	lines := []string{firstTok.text}
+	for p.peek().kind == tokNewline && p.peekNext().kind == tokRawLine {
+		p.next()
+		lines = append(lines, p.next().text)
+	}
+	return &rawNode{pos: firstTok.pos, lines: lines}
+}
+
+func validate(file string, b *block) []*Error {
+	var errs []*Error
+	seenKinds := make(map[string]map[entryKind]bool)
+	seenLabels := make(map[string]map[string]bool)
 	var prevElemKey string
 
 	for _, e := range b.entries {
-		reported := false
-
-		if strings.HasPrefix(e.key, "$") {
-			p.errors = append(p.errors, parseNewError(p.file, e.keyPos, "L205", ""))
-			reported = true
-		}
-
-		if !reported {
-			hasDiffKind := false
-			for k := range seenKindsByKey[e.key] {
+		checkEntry := func() *Error {
+			if strings.HasPrefix(e.key, "$") {
+				return newError(file, e.keyPos, "L205", "")
+			}
+			for k := range seenKinds[e.key] {
 				if k != e.kind {
-					hasDiffKind = true
-					break
+					return newError(file, e.keyPos, "L202", "")
 				}
 			}
-			if hasDiffKind {
-				p.errors = append(p.errors, parseNewError(p.file, e.keyPos, "L202", ""))
-				reported = true
-			}
-		}
-
-		if !reported {
 			if e.kind == entryAssign || e.kind == entryRecord {
-				if seenKeys[e.key] {
-					p.errors = append(p.errors, parseNewError(p.file, e.keyPos, "L201", ""))
-					reported = true
+				if seenKinds[e.key] != nil {
+					return newError(file, e.keyPos, "L201", "")
 				}
 			} else if e.kind == entryElem {
-				labels := seenLabelsByCollKey[e.key]
-				if labels != nil && labels[e.label] {
-					p.errors = append(p.errors, parseNewError(p.file, e.labelPos, "L201", ""))
-					reported = true
+				if seenLabels[e.key] != nil && seenLabels[e.key][e.label] {
+					return newError(file, e.labelPos, "L201", "")
 				}
 			}
-		}
-
-		if !reported {
-			if e.kind == entryElem {
-				if seenKeys[e.key] && prevElemKey != e.key {
-					p.errors = append(p.errors, parseNewError(p.file, e.keyPos, "L203", ""))
-					reported = true
-				}
+			if e.kind == entryElem && seenKinds[e.key] != nil && prevElemKey != e.key {
+				return newError(file, e.keyPos, "L203", "")
 			}
+			return nil
 		}
 
-		if seenKindsByKey[e.key] == nil {
-			seenKindsByKey[e.key] = make(map[entryKind]bool)
+		if err := checkEntry(); err != nil {
+			errs = append(errs, err)
 		}
-		seenKindsByKey[e.key][e.kind] = true
-		seenKeys[e.key] = true
+
+		if seenKinds[e.key] == nil {
+			seenKinds[e.key] = make(map[entryKind]bool)
+		}
+		seenKinds[e.key][e.kind] = true
 		if e.kind == entryElem {
-			if seenLabelsByCollKey[e.key] == nil {
-				seenLabelsByCollKey[e.key] = make(map[string]bool)
+			if seenLabels[e.key] == nil {
+				seenLabels[e.key] = make(map[string]bool)
 			}
-			seenLabelsByCollKey[e.key][e.label] = true
+			seenLabels[e.key][e.label] = true
 			prevElemKey = e.key
 		} else {
 			prevElemKey = ""
 		}
 
+		if lst, ok := e.value.(*listNode); ok && len(lst.elems) > 1 {
+			firstKind := lst.elems[0].tok.kind
+			for _, el := range lst.elems[1:] {
+				if el.tok.kind != firstKind {
+					errs = append(errs, newError(file, el.tok.pos, "L204", ""))
+					break
+				}
+			}
+		}
+
 		if e.body != nil {
-			p.validateBlock(e.body)
+			errs = append(errs, validate(file, e.body)...)
 		}
 	}
+	return errs
 }
 
 func buildRecord(b *block) Record {
-	if b == nil || len(b.entries) == 0 {
-		return Record{}
-	}
 	var fields []Field
 	collIndexByKey := make(map[string]int)
 
 	for _, e := range b.entries {
 		switch e.kind {
 		case entryAssign:
-			v := buildValue(e.value)
-			fields = append(fields, Field{Key: e.key, Value: v})
+			fields = append(fields, Field{Key: e.key, Value: buildValue(e.value)})
 		case entryRecord:
-			sub := buildRecord(e.body)
-			fields = append(fields, Field{Key: e.key, Value: sub})
+			fields = append(fields, Field{Key: e.key, Value: buildRecord(e.body)})
 		case entryElem:
-			sub := buildRecord(e.body)
-			elem := Elem{Label: e.label, Body: sub}
+			elem := Elem{Label: e.label, Body: buildRecord(e.body)}
 			if idx, ok := collIndexByKey[e.key]; ok {
 				coll := fields[idx].Value.(Collection)
 				coll.Elems = append(coll.Elems, elem)
 				fields[idx].Value = coll
 			} else {
-				coll := Collection{Elems: []Elem{elem}}
 				collIndexByKey[e.key] = len(fields)
-				fields = append(fields, Field{Key: e.key, Value: coll})
+				fields = append(fields, Field{Key: e.key, Value: Collection{Elems: []Elem{elem}}})
 			}
 		}
 	}
@@ -800,100 +612,45 @@ func buildRecord(b *block) Record {
 }
 
 func buildValue(n node) Value {
-	if n == nil {
-		return nil
-	}
 	switch v := n.(type) {
 	case *scalarNode:
 		return v.val
 	case *rawNode:
 		return String(strings.Join(v.lines, "\n"))
 	case *listNode:
-		if len(v.elems) == 0 {
-			return List{}
-		}
 		list := make(List, len(v.elems))
 		for i, el := range v.elems {
 			list[i] = el.val
 		}
 		return list
-	default:
-		return nil
 	}
+	return nil
 }
 
-func getScalarKind(k tokKind) int {
-	switch k {
-	case tokString:
-		return 1
-	case tokInt:
-		return 2
-	case tokDecimal:
-		return 3
-	case tokQuantity:
-		return 4
-	case tokBool:
-		return 5
-	case tokEnum:
-		return 6
-	case tokRef:
-		return 7
-	default:
-		return -1
+func normalizeNumber(s string) string {
+	if s == "-0" {
+		return "0"
 	}
-}
-
-func normalizeDecimal(s string) string {
+	intPart, fracPart, hasDot := strings.Cut(s, ".")
+	if !hasDot {
+		return s
+	}
 	isNeg := false
-	if strings.HasPrefix(s, "-") {
+	if strings.HasPrefix(intPart, "-") {
 		isNeg = true
-		s = s[1:]
+		intPart = intPart[1:]
 	}
-	parts := strings.Split(s, ".")
-	intPart := parts[0]
-	fracPart := parts[1]
-
-	intPart = strings.TrimLeft(intPart, "0")
-	if intPart == "" {
-		intPart = "0"
-	}
-
 	fracPart = strings.TrimRight(fracPart, "0")
 	if fracPart == "" {
 		fracPart = "0"
 	}
-
-	if intPart == "0" && strings.Trim(fracPart, "0") == "" {
+	if intPart == "0" && fracPart == "0" {
 		return "0.0"
 	}
-
-	res := intPart + "." + fracPart
 	if isNeg {
-		res = "-" + res
+		return "-" + intPart + "." + fracPart
 	}
-	return res
-}
-
-func normalizeQuantityNumber(s string) string {
-	if strings.Contains(s, ".") {
-		return normalizeDecimal(s)
-	}
-	isNeg := false
-	if strings.HasPrefix(s, "-") {
-		isNeg = true
-		s = s[1:]
-	}
-	s = strings.TrimLeft(s, "0")
-	if s == "" {
-		s = "0"
-	}
-	if s == "0" {
-		return "0"
-	}
-	if isNeg {
-		return "-" + s
-	}
-	return s
+	return intPart + "." + fracPart
 }
 
 func splitQuantity(s string) (string, string) {
@@ -904,18 +661,4 @@ func splitQuantity(s string) (string, string) {
 		}
 	}
 	return s, ""
-}
-
-func parseNewError(file string, pos Pos, code, hint string) *Error {
-	msg := errorMessages[code]
-	if hint == "" {
-		hint = errorHints[code]
-	}
-	return &Error{
-		File: file,
-		Pos:  pos,
-		Code: code,
-		Msg:  msg,
-		Hint: hint,
-	}
 }
