@@ -1180,3 +1180,406 @@ func TestUnicodeColumns(t *testing.T) {
 		}
 	})
 }
+
+func assertSingleErrorHint(t *testing.T, name, src, wantCode string, line, col int, wantHint string) {
+	t.Helper()
+	file, err := Parse(name, []byte(src))
+	if err == nil {
+		t.Fatalf("Parse(%q) succeeded unexpectedly, want error", name)
+	}
+	if file != nil {
+		t.Errorf("Parse(%q) returned non-nil File on error: %v", name, file)
+	}
+	single := errRequireSingle(t, err)
+	if single.Code != wantCode {
+		t.Errorf("Parse(%q) code mismatch: got %q, want %q", name, single.Code, wantCode)
+	}
+	if single.Pos.Line != line || single.Pos.Col != col {
+		t.Errorf("Parse(%q) pos mismatch: got %d:%d, want %d:%d", name, single.Pos.Line, single.Pos.Col, line, col)
+	}
+	if single.Hint != wantHint {
+		t.Errorf("Parse(%q) hint mismatch:\ngot:  %q\nwant: %q", name, single.Hint, wantHint)
+	}
+}
+
+func TestRecoveryRules(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []expectedError
+	}{
+		{
+			name: "recovery_counts_brackets_and_braces",
+			src:  "@lkal \"0.1\"\na = [\n  1,\n  x,\n  3,\n]\nb = 2\n",
+			want: []expectedError{
+				{code: "L102", line: 4, col: 3},
+			},
+		},
+		{
+			name: "lone_closing_brace_without_declaration",
+			src:  "}\n",
+			want: []expectedError{
+				{code: "L105", line: 1, col: 1},
+				{code: "L106", line: 1, col: 1},
+			},
+		},
+		{
+			name: "one_syntax_error_unclosed_list_with_comment",
+			src:  "@lkal \"0.1\"\na = [\n### c\n",
+			want: []expectedError{
+				{code: "L002", line: 3, col: 1},
+			},
+		},
+		{
+			name: "one_syntax_error_missing_comma_after_comment",
+			src:  "@lkal \"0.1\"\na = [\n### c\n1 2]\n",
+			want: []expectedError{
+				{code: "L002", line: 3, col: 1},
+			},
+		},
+		{
+			name: "one_syntax_error_multiple_comments_in_list",
+			src:  "@lkal \"0.1\"\na = [1,\n### c\n### d\n2]\n",
+			want: []expectedError{
+				{code: "L002", line: 3, col: 1},
+			},
+		},
+		{
+			name: "one_syntax_error_nested_record_list_comment",
+			src:  "@lkal \"0.1\"\na {\n b = [\n### c\n1]\n c = d\n}\n",
+			want: []expectedError{
+				{code: "L002", line: 4, col: 1},
+			},
+		},
+		{
+			name: "semantic_rules_suppressed_on_syntax_error",
+			src:  "@lkal \"0.1\"\na = [1, \"x\" 2]\n",
+			want: []expectedError{
+				{code: "L106", line: 2, col: 13},
+			},
+		},
+		{
+			name: "scanning_order_first_token_problem",
+			src:  "@lkal \"0.1\"\na = &/\"\\q\"\n",
+			want: []expectedError{
+				{code: "L009", line: 2, col: 5},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertExactErrors(t, tc.name+".lkal", tc.src, tc.want)
+		})
+	}
+}
+
+func TestDirectiveOutOfPlace(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []expectedError
+	}{
+		{
+			name: "directive_in_value_position",
+			src:  "@lkal \"0.1\"\na =\n@lkal \"0.1\"\n",
+			want: []expectedError{
+				{code: "L105", line: 3, col: 1},
+			},
+		},
+		{
+			name: "directive_in_list_position",
+			src:  "@lkal \"0.1\"\na = [\n@lkal\n]\n",
+			want: []expectedError{
+				{code: "L105", line: 3, col: 1},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertExactErrors(t, tc.name+".lkal", tc.src, tc.want)
+		})
+	}
+}
+
+func TestStrayRawStrings(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []expectedError
+	}{
+		{
+			name: "gap_between_raw_lines_resumes_valid_entry",
+			src:  "@lkal \"0.1\"\na =\n\\\\x\n\n\\\\y\nb =\n[1,\n2]\n",
+			want: []expectedError{
+				{code: "L104", line: 5, col: 1},
+			},
+		},
+		{
+			name: "gap_between_raw_lines_preserves_block_semantic_error",
+			src:  "@lkal \"0.1\"\na =\n\\\\x\n\n\\\\y\nb {\nc = 1\nc = 2\n}\n",
+			want: []expectedError{
+				{code: "L104", line: 5, col: 1},
+				{code: "L201", line: 8, col: 1},
+			},
+		},
+		{
+			name: "duplicate_key_precedes_raw_gap_error",
+			src:  "@lkal \"0.1\"\na = 1\na =\n\\\\x\n\n\\\\y\n",
+			want: []expectedError{
+				{code: "L201", line: 3, col: 1},
+				{code: "L104", line: 6, col: 1},
+			},
+		},
+		{
+			name: "top_level_raw_run_without_assign",
+			src:  "@lkal \"0.1\"\n\\\\x\n\\\\y\n",
+			want: []expectedError{
+				{code: "L106", line: 2, col: 1},
+			},
+		},
+		{
+			name: "stray_raw_run_after_brace_recovery",
+			src:  "@lkal \"0.1\"\na =\n\\\\x\n}\n\n\\\\y\n",
+			want: []expectedError{
+				{code: "L106", line: 4, col: 1},
+				{code: "L106", line: 6, col: 1},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertExactErrors(t, tc.name+".lkal", tc.src, tc.want)
+		})
+	}
+}
+
+func TestBOMRecovery(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []expectedError
+	}{
+		{
+			name: "bom_before_head_comment",
+			src:  "\ufeff### c\n@lkal \"0.1\"\na = 1\n",
+			want: []expectedError{
+				{code: "L008", line: 1, col: 1},
+			},
+		},
+		{
+			name: "bom_missing_version",
+			src:  "\ufeffa = 1\n",
+			want: []expectedError{
+				{code: "L008", line: 1, col: 1},
+				{code: "L105", line: 1, col: 2},
+			},
+		},
+		{
+			name: "bom_unsupported_version",
+			src:  "\ufeff@lkal \"0.2\"\n",
+			want: []expectedError{
+				{code: "L008", line: 1, col: 1},
+				{code: "L207", line: 1, col: 8},
+			},
+		},
+		{
+			name: "bom_empty_document",
+			src:  "\ufeff",
+			want: []expectedError{
+				{code: "L008", line: 1, col: 1},
+				{code: "L105", line: 1, col: 2},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertExactErrors(t, tc.name+".lkal", tc.src, tc.want)
+		})
+	}
+}
+
+func TestHeaderRecovery(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []expectedError
+	}{
+		{
+			name: "missing_version_string_resumes_multiline_entry",
+			src:  "@lkal\na =\n[1,\n2]\n",
+			want: []expectedError{
+				{code: "L105", line: 1, col: 6},
+			},
+		},
+		{
+			name: "missing_version_string_resumes_subsequent_entry",
+			src:  "@lkal\na = b\n",
+			want: []expectedError{
+				{code: "L105", line: 1, col: 6},
+				{code: "L102", line: 2, col: 5},
+			},
+		},
+		{
+			name: "unexpected_brace_on_header_line_recovers_to_next_line",
+			src:  "@lkal \"0.1\" {\nb = c\n}\nd = e\n",
+			want: []expectedError{
+				{code: "L106", line: 1, col: 13},
+				{code: "L102", line: 4, col: 5},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertExactErrors(t, tc.name+".lkal", tc.src, tc.want)
+		})
+	}
+}
+
+func TestEOFInsideBrackets(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []expectedError
+	}{
+		{
+			name: "eof_inside_list",
+			src:  "@lkal \"0.1\"\na = [1, \"x\"",
+			want: []expectedError{
+				{code: "L103", line: 2, col: 5},
+			},
+		},
+		{
+			name: "eof_after_equal_in_record",
+			src:  "@lkal \"0.1\"\na {\n b =",
+			want: []expectedError{
+				{code: "L103", line: 2, col: 3},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertExactErrors(t, tc.name+".lkal", tc.src, tc.want)
+		})
+	}
+}
+
+func TestUnexpectedTokenHints(t *testing.T) {
+	tests := []struct {
+		name     string
+		src      string
+		line     int
+		col      int
+		wantHint string
+	}{
+		{
+			name:     "entry_start_closing_brace",
+			src:      "@lkal \"0.1\"\n}\n",
+			line:     2,
+			col:      1,
+			wantHint: "項目は キー = 値、キー { … }、キー \"ラベル\" { … } のどれかで始める",
+		},
+		{
+			name:     "entry_start_raw_line",
+			src:      "@lkal \"0.1\"\n\\\\x\n",
+			line:     2,
+			col:      1,
+			wantHint: "項目は キー = 値、キー { … }、キー \"ラベル\" { … } のどれかで始める",
+		},
+		{
+			name:     "keyword_as_key",
+			src:      "@lkal \"0.1\"\ntrue = 1\n",
+			line:     2,
+			col:      1,
+			wantHint: "予約語をキーにするときは引用符で囲む",
+		},
+		{
+			name:     "after_key",
+			src:      "@lkal \"0.1\"\na 1\n",
+			line:     2,
+			col:      3,
+			wantHint: "キーの後ろには =、{、\"ラベル\" のどれかを書く",
+		},
+		{
+			name:     "after_label",
+			src:      "@lkal \"0.1\"\na \"x\" 1\n",
+			line:     2,
+			col:      7,
+			wantHint: "ラベルの後ろには { を書く",
+		},
+		{
+			name:     "after_value",
+			src:      "@lkal \"0.1\"\na = 1 b = 2\n",
+			line:     2,
+			col:      7,
+			wantHint: "項目の間は改行かカンマで区切る",
+		},
+		{
+			name:     "brace_after_equal",
+			src:      "@lkal \"0.1\"\na = { b = 1 }\n",
+			line:     2,
+			col:      5,
+			wantHint: "レコードは = を付けずに key { … } と書く",
+		},
+		{
+			name:     "nested_list_in_list",
+			src:      "@lkal \"0.1\"\na = [[1]]\n",
+			line:     2,
+			col:      6,
+			wantHint: "リストの要素にはスカラーだけを書ける",
+		},
+		{
+			name:     "record_in_list",
+			src:      "@lkal \"0.1\"\na = [{}]\n",
+			line:     2,
+			col:      6,
+			wantHint: "リストの要素にはスカラーだけを書ける",
+		},
+		{
+			name:     "missing_comma_in_list",
+			src:      "@lkal \"0.1\"\na = [1 2]\n",
+			line:     2,
+			col:      8,
+			wantHint: "リストの要素は , で区切る",
+		},
+		{
+			name:     "unexpected_closing_bracket_in_assign",
+			src:      "@lkal \"0.1\"\na = ]\n",
+			line:     2,
+			col:      5,
+			wantHint: `値には文字列・数値・量・真偽値・列挙子・参照・リスト・\\ 行のどれかを書く`,
+		},
+		{
+			name:     "unexpected_equal_in_list",
+			src:      "@lkal \"0.1\"\na = [=]\n",
+			line:     2,
+			col:      6,
+			wantHint: `値には文字列・数値・量・真偽値・列挙子・参照・リスト・\\ 行のどれかを書く`,
+		},
+		{
+			name:     "comment_between_assign_and_value",
+			src:      "@lkal \"0.1\"\na =\n### c\n",
+			line:     3,
+			col:      1,
+			wantHint: "= と値の間にコメント行は書けない",
+		},
+		{
+			name:     "version_trailing_character",
+			src:      "@lkal \"0.1\" a = 1\n",
+			line:     1,
+			col:      13,
+			wantHint: "版の宣言の後ろは改行する",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSingleErrorHint(t, tc.name+".lkal", tc.src, "L106", tc.line, tc.col, tc.wantHint)
+		})
+	}
+}
