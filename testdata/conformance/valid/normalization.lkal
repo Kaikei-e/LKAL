@@ -1,0 +1,9 @@
+@lkal "0.1"
+
+int_zero = -0
+dec_trail = 1.50
+dec_whole = 2.00
+dec_zero = -0.0
+dec_neg_trail = -0.50
+qty_dec = 1.50Gi
+qty_zero = -0Mi

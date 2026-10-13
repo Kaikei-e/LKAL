@@ -1,0 +1,25 @@
+@lkal "0.1"
+
+### フロントエンドのWebサーバー
+service "web" {
+  replicas = 3
+  traffic-share = 0.25
+  labels { "app.kubernetes.io/name" = "web", tier = "frontend" }
+
+  container "app" {
+    image = "ghcr.io/acme/web:1.4.2"
+    args = ["--port", "8080"]
+    memory = 512Mi
+    cpu = 250m
+    timeout = 30s
+    port "http" { number = 8080, protocol = .tcp }
+    port "metrics" { number = 9090, protocol = .tcp }
+    env { LOG_LEVEL = "info" }
+    secret = &secret/db-creds
+  }
+
+  ### 起動スクリプト。各行を \\ で始める
+  startup =
+    \\#!/bin/sh
+    \\exec /app/web --port 8080
+}

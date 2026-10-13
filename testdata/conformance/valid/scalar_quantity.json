@@ -1,0 +1,18 @@
+{
+  "$lkal": "0.1",
+  "memory": {
+    "$qty": "512Mi"
+  },
+  "cpu": {
+    "$qty": "250m"
+  },
+  "rate": {
+    "$qty": "1.5Gi"
+  },
+  "duration": {
+    "$qty": "30s"
+  },
+  "zero_q": {
+    "$qty": "0s"
+  }
+}

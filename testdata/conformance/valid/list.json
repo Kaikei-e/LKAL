@@ -1,0 +1,54 @@
+{
+  "$lkal": "0.1",
+  "empty": [],
+  "strings": [
+    "a",
+    "b",
+    "c"
+  ],
+  "integers": [
+    1,
+    2,
+    3
+  ],
+  "decimals": [
+    0.1,
+    0.2
+  ],
+  "booleans": [
+    true,
+    false
+  ],
+  "enums": [
+    {
+      "$enum": "tcp"
+    },
+    {
+      "$enum": "udp"
+    }
+  ],
+  "quantities": [
+    {
+      "$qty": "100m"
+    },
+    {
+      "$qty": "200m"
+    }
+  ],
+  "refs": [
+    {
+      "$ref": "secret/a"
+    },
+    {
+      "$ref": "secret/b"
+    }
+  ],
+  "trailing_comma": [
+    1,
+    2
+  ],
+  "multiline": [
+    "alpha",
+    "beta"
+  ]
+}

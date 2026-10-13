@@ -1,0 +1,8 @@
+@lkal "0.1"
+port "http" {
+  number = 80
+}
+host = "localhost"
+port "metrics" {
+  number = 9090
+}

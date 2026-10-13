@@ -1,0 +1,20 @@
+@lkal "0.1"
+
+multiline =
+  \\first line
+  \\second line
+
+with_blank =
+  \\one
+  \\
+  \\two
+
+indented =
+  \\  two spaces
+
+trailing_newline =
+  \\line
+  \\
+
+hashes =
+  \\### this is not a comment

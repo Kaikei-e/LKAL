@@ -1,0 +1,12 @@
+preset: adr
+dir: docs/ADR
+id_width: 4
+template: docs/ADR/template.md
+references:
+  dangling: error
+
+structural:
+  missing_frontmatter: error
+
+sections:
+  required: ["コンテキスト", "決定", "検討した代替案|代替案と棄却理由", "影響とトレードオフ|帰結"]

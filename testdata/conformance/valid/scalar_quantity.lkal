@@ -1,0 +1,7 @@
+@lkal "0.1"
+
+memory = 512Mi
+cpu = 250m
+rate = 1.5Gi
+duration = 30s
+zero_q = 0s

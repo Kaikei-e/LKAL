@@ -1,0 +1,8 @@
+{
+  "$lkal": "0.1",
+  "multiline": "first line\nsecond line",
+  "with_blank": "one\n\ntwo",
+  "indented": "  two spaces",
+  "trailing_newline": "line\n",
+  "hashes": "### this is not a comment"
+}
