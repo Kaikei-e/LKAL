@@ -253,6 +253,8 @@ func lexCheckCommentOrRawInvalidChars(file string, lineNum int, cols []int, line
 		r, sz := utf8.DecodeRune(line[i:])
 		if r == utf8.RuneError && sz == 1 {
 			errs = append(errs, newError(file, Pos{Line: lineNum, Col: cols[i]}, "L008", ""))
+		} else if (r < 0x20 && r != '\t') || r == 0x7f {
+			errs = append(errs, newError(file, Pos{Line: lineNum, Col: cols[i]}, "L008", ""))
 		}
 		i += sz
 	}

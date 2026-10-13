@@ -24,7 +24,15 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	s := e.File + ":" + e.Pos.String() + ": " + e.Code + " " + e.Msg
+	var prefix string
+	if e.File != "" && e.Pos.Line > 0 {
+		prefix = e.File + ":" + e.Pos.String() + ": "
+	} else if e.File == "" && e.Pos.Line > 0 {
+		prefix = e.Pos.String() + ": "
+	} else if e.File != "" && e.Pos.Line == 0 {
+		prefix = e.File + ": "
+	}
+	s := prefix + e.Code + " " + e.Msg
 	if e.Hint != "" {
 		s += "\n  hint: " + e.Hint
 	}
@@ -72,6 +80,14 @@ var errorMessages = map[string]string{
 	"L205": "key starts with $",
 	"L206": "value assigned to a collection element",
 	"L207": "unsupported version",
+	"L301": "invalid JSON",
+	"L302": "null value",
+	"L303": "number in exponent notation",
+	"L304": "list element is not a scalar",
+	"L305": "malformed tag",
+	"L401": "malformed path",
+	"L402": "path not found",
+	"L403": "invalid value",
 }
 
 var errorHints = map[string]string{
@@ -97,6 +113,11 @@ var errorHints = map[string]string{
 	"L205": "rename the key",
 	"L206": `write a block instead: key "label" { ... }`,
 	"L207": `this implementation accepts only "0.1"`,
+	"L301": "fix the JSON syntax",
+	"L302": "omit the key instead of writing null",
+	"L303": "write the number without an exponent",
+	"L304": "use only scalars as list elements",
+	"L401": "separate segments with / and quote segments that contain other characters",
 }
 
 func newError(file string, pos Pos, code, hint string) *Error {
