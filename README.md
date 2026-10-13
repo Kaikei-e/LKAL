@@ -26,19 +26,20 @@ service "web" {
 }
 ```
 
-This repository holds the Go reference implementation: a lexer, a parser, and a data model with semantic validation. It uses only the standard library.
+This repository holds the Go reference implementation: a parser with semantic validation, the canonical formatter, LKAL-JSON conversion, path operations, and the `lkal` command. It uses only the standard library.
 
 ## Status
 
-The format is at draft v0.1 and may change. A formatter, JSON conversion, path operations and a CLI are not implemented yet.
+The format is at draft v0.1 and may change.
 
 ## Install
 
 ```sh
 go get github.com/Kaikei-e/LKAL
+go install github.com/Kaikei-e/LKAL/cmd/lkal@latest
 ```
 
-Requires Go 1.26 or later.
+Requires Go 1.27 or later (LKAL-JSON uses `encoding/json/jsontext`).
 
 ## Usage
 
@@ -58,6 +59,37 @@ data := f.Data() // lkal.Record
 ```
 bad.lkal:2:12: L102 bare word in value position
   hint: write "three" for a string or .three for an enum
+```
+
+The rest of the API works on a parsed `*lkal.File`:
+
+| Function | Purpose |
+| --- | --- |
+| `lkal.Format(src)`, `f.Format()` | Canonical form (idempotent; keeps comments, blank lines and one-line blocks) |
+| `lkal.ToJSON(f, plain)` | LKAL-JSON (`plain = false`, reversible) or plain JSON |
+| `lkal.FromJSON(src)` | Read LKAL-JSON back into a `*lkal.File` |
+| `f.Get(path)`, `f.Set(path, v)`, `f.Delete(path)` | Read and edit one value by path, e.g. `service/web/container/app/image`; comments are kept |
+| `lkal.ParseValue(src)`, `lkal.FormatValue(v)` | Value text as used by `lkal get` and `lkal set` |
+
+Blocks nest at most 1000 levels deep (`L107`).
+
+## Command
+
+```
+lkal fmt [-w] [-l] FILE…
+lkal check FILE…
+lkal json [-plain] FILE
+lkal from-json FILE
+lkal get FILE PATH
+lkal set FILE PATH VALUE
+lkal del FILE PATH
+```
+
+Every command accepts `-json` to print errors as a JSON array on stderr. Exit codes: 0 success, 1 LKAL errors, 2 usage or I/O errors.
+
+```sh
+lkal set web.lkal service/web/container/app/image '"ghcr.io/acme/web:1.5.0"'
+lkal get web.lkal service/web/container/app/port/http/number   # 8080
 ```
 
 ## Values
@@ -83,7 +115,11 @@ bad.lkal:2:12: L102 bare word in value position
 go test ./...
 go vet ./...
 go test -run '^$' -fuzz=FuzzParse -fuzztime=30s
+go test -run '^$' -fuzz=FuzzFormat -fuzztime=30s
+go test -run '^$' -fuzz=FuzzFromJSON -fuzztime=30s
 ```
+
+`go test -short ./...` skips the timing checks, which can fail on a heavily loaded machine.
 
 Design decisions are recorded in [`docs/ADR`](docs/ADR).
 

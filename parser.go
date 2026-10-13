@@ -2,6 +2,7 @@ package lkal
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -34,12 +35,15 @@ func (f *File) Data() Record {
 	return buildRecord(f.body)
 }
 
+const maxBlockDepth = 1000
+
 type parser struct {
 	file     string
 	tokens   []token
 	pos      int
 	errors   []*Error
 	brackets []token
+	depth    int
 }
 
 func (p *parser) peek() token {
@@ -234,6 +238,12 @@ func (p *parser) parseFileBody() *block {
 }
 
 func (p *parser) parseBracedBlock() (*block, bool) {
+	if p.depth >= maxBlockDepth {
+		p.syntaxError(p.peek(), "L107", "")
+		return nil, false
+	}
+	p.depth++
+
 	lbraceTok := p.next()
 	p.track(lbraceTok)
 	var entries []*entry
@@ -251,6 +261,7 @@ func (p *parser) parseBracedBlock() (*block, bool) {
 		s.blank = false
 
 		if !ok {
+			p.depth--
 			return nil, false
 		}
 		entries = append(entries, ent)
@@ -259,6 +270,7 @@ func (p *parser) parseBracedBlock() (*block, bool) {
 
 	rbraceTok := p.next()
 	p.track(rbraceTok)
+	p.depth--
 	return &block{
 		entries:  entries,
 		trailing: s.comments,
@@ -614,13 +626,20 @@ func buildRecord(b *block) Record {
 func buildValue(n node) Value {
 	switch v := n.(type) {
 	case *scalarNode:
+		if r, ok := v.val.(Ref); ok {
+			return slices.Clone(r)
+		}
 		return v.val
 	case *rawNode:
 		return String(strings.Join(v.lines, "\n"))
 	case *listNode:
 		list := make(List, len(v.elems))
 		for i, el := range v.elems {
-			list[i] = el.val
+			if r, ok := el.val.(Ref); ok {
+				list[i] = slices.Clone(r)
+			} else {
+				list[i] = el.val
+			}
 		}
 		return list
 	}

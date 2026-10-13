@@ -1,0 +1,13 @@
+{
+  "$lkal": "0.1",
+  "empty": [],
+  "ints": [
+    1,
+    2,
+    3
+  ],
+  "multiline_str": [
+    "first\nline",
+    "second"
+  ]
+}

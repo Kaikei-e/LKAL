@@ -242,16 +242,15 @@ func lexCommentText(rawAfterHashes string) string {
 	return strings.TrimRight(rawAfterHashes, " \t")
 }
 
+func isControlChar(r rune) bool {
+	return (r < 0x20 && r != '\t') || r == 0x7f
+}
+
 func lexCheckCommentOrRawInvalidChars(file string, lineNum int, cols []int, line []byte, off int) []*Error {
 	var errs []*Error
 	for i := off; i < len(line); {
-		if line[i] == '\r' {
-			errs = append(errs, newError(file, Pos{Line: lineNum, Col: cols[i]}, "L008", ""))
-			i++
-			continue
-		}
 		r, sz := utf8.DecodeRune(line[i:])
-		if r == utf8.RuneError && sz == 1 {
+		if (r == utf8.RuneError && sz == 1) || isControlChar(r) {
 			errs = append(errs, newError(file, Pos{Line: lineNum, Col: cols[i]}, "L008", ""))
 		}
 		i += sz
@@ -442,12 +441,7 @@ func lexScanString(src []byte, off int) scanResult {
 		}
 
 		r, sz := utf8.DecodeRune(src[i:])
-		if r == utf8.RuneError && sz == 1 {
-			res.setErr("L008", i)
-			i++
-			continue
-		}
-		if (r < 0x20 && r != '\t') || r == 0x7f {
+		if (r == utf8.RuneError && sz == 1) || isControlChar(r) {
 			res.setErr("L008", i)
 			i += sz
 			continue

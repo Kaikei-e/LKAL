@@ -1,0 +1,21 @@
+{
+  "service": {
+    "web": {
+      "port": {
+        "http": {
+          "number": 80
+        },
+        "https": {
+          "number": 443
+        }
+      }
+    },
+    "api": {
+      "port": {
+        "grpc": {
+          "number": 50051
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+@lkal "0.1"
+
+one_line_list = [1, 2, 3]
+multi_line_list = [
+  "alpha",
+
+  "beta",
+  "gamma\nwith\nnewline"
+]
+empty_multi_list = [
+
+]
+n1 = 1.50
+n2 = 2.00
+n3 = -0
+n4 = -0.0
+q1 = 1.50Gi
+q2 = -0Mi
+"unquoted_key" = 1
+"true" = 1
+"false" = 2
+"needs quote" = 3
+ref1 = &a/"b"
+ref2 = &a/"b c"
+ref3 = &a/""

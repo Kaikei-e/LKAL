@@ -24,7 +24,17 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	s := e.File + ":" + e.Pos.String() + ": " + e.Code + " " + e.Msg
+	var s string
+	if e.File != "" {
+		s += e.File + ":"
+	}
+	if e.Pos.Line > 0 {
+		s += e.Pos.String() + ":"
+	}
+	if s != "" {
+		s += " "
+	}
+	s += e.Code + " " + e.Msg
 	if e.Hint != "" {
 		s += "\n  hint: " + e.Hint
 	}
@@ -65,6 +75,7 @@ var errorMessages = map[string]string{
 	"L104": "blank line or comment inside a multi-line string",
 	"L105": "missing, misplaced or repeated version declaration",
 	"L106": "unexpected token",
+	"L107": "blocks nested too deeply",
 	"L201": "duplicate key or label",
 	"L202": "key used for more than one kind of entry",
 	"L203": "collection elements are not contiguous",
@@ -72,6 +83,14 @@ var errorMessages = map[string]string{
 	"L205": "key starts with $",
 	"L206": "value assigned to a collection element",
 	"L207": "unsupported version",
+	"L301": "invalid JSON",
+	"L302": "null value",
+	"L303": "number in exponent notation",
+	"L304": "list element is not a scalar",
+	"L305": "malformed tag",
+	"L401": "malformed path",
+	"L402": "path not found",
+	"L403": "invalid value",
 }
 
 var errorHints = map[string]string{
@@ -90,6 +109,7 @@ var errorHints = map[string]string{
 	"L104": `remove the gap; write an empty line as a lone \\`,
 	"L105": `write @lkal "0.1" once, at the top`,
 	"L106": `start an entry with key = value, key { ... } or key "label" { ... }`,
+	"L107": "nest blocks at most 1000 levels deep",
 	"L201": "remove one of them",
 	"L202": "use the key for one kind only: assignment, record or collection",
 	"L203": "write the elements next to each other",
@@ -97,6 +117,11 @@ var errorHints = map[string]string{
 	"L205": "rename the key",
 	"L206": `write a block instead: key "label" { ... }`,
 	"L207": `this implementation accepts only "0.1"`,
+	"L301": "fix the JSON syntax",
+	"L302": "omit the key instead of writing null",
+	"L303": "write the number without an exponent",
+	"L304": "use only scalars as list elements",
+	"L401": "separate segments with / and quote segments that contain other characters",
 }
 
 func newError(file string, pos Pos, code, hint string) *Error {

@@ -1,0 +1,6 @@
+{
+  "$lkal": "0.1",
+  "content": "line1\nline2\nline3",
+  "trailing_nl": "hello\n",
+  "with_cr": "line1\r\nline2"
+}

@@ -608,3 +608,166 @@ func TestLexEnumAndRefTrailingInvalidChars(t *testing.T) {
 	}
 	runLexCases(t, cases)
 }
+
+func TestLexControlCharsInCommentAndRawLines(t *testing.T) {
+	cases := []lexCase{
+		{
+			name: "ContractGComment",
+			src:  "@lkal \"0.1\"\n### a\x01b\n",
+			tokens: []token{
+				tok(tokDirective, 1, 1, "@lkal", "lkal"),
+				tok(tokString, 1, 7, "\"0.1\"", "0.1"),
+				tok(tokNewline, 1, 12, "\n", ""),
+				tok(tokComment, 2, 1, "### a\x01b", "a\x01b"),
+				tok(tokNewline, 2, 8, "\n", ""),
+				eofTok(3, 1),
+			},
+			errs: []*Error{errExp("L008", 2, 6)},
+		},
+		{
+			name: "ContractGRawLine",
+			src:  "@lkal \"0.1\"\nx =\n  \\\\a\x7fb\n",
+			tokens: []token{
+				tok(tokDirective, 1, 1, "@lkal", "lkal"),
+				tok(tokString, 1, 7, "\"0.1\"", "0.1"),
+				tok(tokNewline, 1, 12, "\n", ""),
+				tok(tokName, 2, 1, "x", "x"),
+				tok(tokAssign, 2, 3, "=", ""),
+				tok(tokNewline, 2, 4, "\n", ""),
+				tok(tokRawLine, 3, 3, "\\\\a\x7fb", "a\x7fb"),
+				tok(tokNewline, 3, 8, "\n", ""),
+				eofTok(4, 1),
+			},
+			errs: []*Error{errExp("L008", 3, 6)},
+		},
+		{
+			name: "CommentU0000",
+			src:  "### a\x00b\n",
+			tokens: []token{
+				tok(tokComment, 1, 1, "### a\x00b", "a\x00b"),
+				tok(tokNewline, 1, 8, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 6)},
+		},
+		{
+			name: "CommentU001B",
+			src:  "### a\x1bb\n",
+			tokens: []token{
+				tok(tokComment, 1, 1, "### a\x1bb", "a\x1bb"),
+				tok(tokNewline, 1, 8, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 6)},
+		},
+		{
+			name: "CommentU001F",
+			src:  "### a\x1fb\n",
+			tokens: []token{
+				tok(tokComment, 1, 1, "### a\x1fb", "a\x1fb"),
+				tok(tokNewline, 1, 8, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 6)},
+		},
+		{
+			name: "CommentU007F",
+			src:  "### a\x7fb\n",
+			tokens: []token{
+				tok(tokComment, 1, 1, "### a\x7fb", "a\x7fb"),
+				tok(tokNewline, 1, 8, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 6)},
+		},
+		{
+			name: "RawLineU0000",
+			src:  "\\\\a\x00b\n",
+			tokens: []token{
+				tok(tokRawLine, 1, 1, "\\\\a\x00b", "a\x00b"),
+				tok(tokNewline, 1, 6, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 4)},
+		},
+		{
+			name: "RawLineU001B",
+			src:  "\\\\a\x1bb\n",
+			tokens: []token{
+				tok(tokRawLine, 1, 1, "\\\\a\x1bb", "a\x1bb"),
+				tok(tokNewline, 1, 6, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 4)},
+		},
+		{
+			name: "RawLineU001F",
+			src:  "\\\\a\x1fb\n",
+			tokens: []token{
+				tok(tokRawLine, 1, 1, "\\\\a\x1fb", "a\x1fb"),
+				tok(tokNewline, 1, 6, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 4)},
+		},
+		{
+			name: "RawLineU007F",
+			src:  "\\\\a\x7fb\n",
+			tokens: []token{
+				tok(tokRawLine, 1, 1, "\\\\a\x7fb", "a\x7fb"),
+				tok(tokNewline, 1, 6, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 4)},
+		},
+		{
+			name: "TwoControlCharsInComment",
+			src:  "### \x01 \x02\n",
+			tokens: []token{
+				tok(tokComment, 1, 1, "### \x01 \x02", "\x01 \x02"),
+				tok(tokNewline, 1, 8, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 5), errExp("L008", 1, 7)},
+		},
+		{
+			name: "TwoControlCharsInRawLine",
+			src:  "\\\\\x01\x02\n",
+			tokens: []token{
+				tok(tokRawLine, 1, 1, "\\\\\x01\x02", "\x01\x02"),
+				tok(tokNewline, 1, 5, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L008", 1, 3), errExp("L008", 1, 4)},
+		},
+		{
+			name: "ControlCharInL001Comment",
+			src:  "# a\x01b\n",
+			tokens: []token{
+				tok(tokComment, 1, 1, "# a\x01b", "a\x01b"),
+				tok(tokNewline, 1, 6, "\n", ""),
+				eofTok(2, 1),
+			},
+			errs: []*Error{errExp("L001", 1, 1), errExp("L008", 1, 4)},
+		},
+		{
+			name: "TabAllowedInComment",
+			src:  "### a\tb\n",
+			tokens: []token{
+				tok(tokComment, 1, 1, "### a\tb", "a\tb"),
+				tok(tokNewline, 1, 8, "\n", ""),
+				eofTok(2, 1),
+			},
+		},
+		{
+			name: "TabAllowedInRawLine",
+			src:  "\\\\a\tb\n",
+			tokens: []token{
+				tok(tokRawLine, 1, 1, "\\\\a\tb", "a\tb"),
+				tok(tokNewline, 1, 6, "\n", ""),
+				eofTok(2, 1),
+			},
+		},
+	}
+	runLexCases(t, cases)
+}

@@ -1,0 +1,9 @@
+@lkal "0.1"
+
+str = "simple text"
+num = 42
+dec = 1.5
+flag = true
+proto = .tcp
+mem = 512Mi
+link = &secret/creds

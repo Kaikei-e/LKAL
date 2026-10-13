@@ -1,0 +1,15 @@
+@lkal "0.1"
+
+two_lines = "a\nb"
+with_trailing_newline = "line\n"
+crlf_string = "a\r\nb"
+control_string = "a\u{1}\nb"
+single_raw =
+  \\only_one
+script =
+  \\echo first
+  \\
+  \\echo second
+tabbed =
+  \\col1	col2
+  \\val1	val2
