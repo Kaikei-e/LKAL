@@ -35,6 +35,8 @@ func (f *File) Data() Record {
 	return buildRecord(f.body)
 }
 
+const maxBlockDepth = 1000
+
 type parser struct {
 	file     string
 	tokens   []token
@@ -101,7 +103,6 @@ func (p *parser) recover() {
 		}
 	}
 	p.brackets = nil
-	p.depth = 0
 }
 
 type bodyState struct {

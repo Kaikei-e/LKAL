@@ -65,11 +65,8 @@ func (f *File) Set(path string, v Value) error {
 		if !isRec {
 			return pathError(f.name, "L403", "use a record for a collection element")
 		}
-		if hint := validateValue(recVal); hint != "" {
+		if hint := validateValue(recVal, parent.depth+1); hint != "" {
 			return pathError(f.name, "L403", hint)
-		}
-		if parent.depth+recordDepth(recVal) > maxBlockDepth {
-			return pathError(f.name, "L403", "nest blocks at most 1000 levels deep")
 		}
 		vNorm := normalizeValue(recVal).(Record)
 
@@ -108,11 +105,8 @@ func (f *File) Set(path string, v Value) error {
 		return pathError(f.name, "L403", "rename keys that start with $")
 	}
 
-	if hint := validateValue(v); hint != "" {
+	if hint := validateValue(v, parent.depth+1); hint != "" {
 		return pathError(f.name, "L403", hint)
-	}
-	if parent.depth+recordDepth(v) > maxBlockDepth {
-		return pathError(f.name, "L403", "nest blocks at most 1000 levels deep")
 	}
 
 	vNorm := normalizeValue(v)
@@ -243,7 +237,7 @@ func ParseValue(src []byte) (Value, error) {
 	tokens, lexErrs := lex("", src)
 
 	pos := 0
-	for pos < len(tokens) && (tokens[pos].kind == tokNewline || tokens[pos].kind == tokComment) {
+	for tokens[pos].kind == tokNewline || tokens[pos].kind == tokComment {
 		pos++
 	}
 
@@ -321,7 +315,14 @@ func ParseValue(src []byte) (Value, error) {
 	for p.peek().kind == tokNewline || p.peek().kind == tokComment {
 		p.next()
 	}
-	if ok && p.peek().kind != tokEOF {
+	hasSyntaxErr := len(lexErrs) > 0
+	for _, err := range p.errors {
+		if err.Code < "L201" || err.Code > "L205" {
+			hasSyntaxErr = true
+			break
+		}
+	}
+	if ok && !hasSyntaxErr && p.peek().kind != tokEOF {
 		p.syntaxError(p.peek(), "L106", "write a value: string, number, quantity, boolean, enum, reference, list or \\ lines")
 	}
 
@@ -433,30 +434,7 @@ func scanNumber(s string) (int, bool, bool) {
 	return intDigits + fracDigits, hasFrac, true
 }
 
-func recordDepth(v Value) int {
-	switch val := v.(type) {
-	case Record:
-		maxChild := 0
-		for _, f := range val.Fields {
-			if d := recordDepth(f.Value); d > maxChild {
-				maxChild = d
-			}
-		}
-		return 1 + maxChild
-	case Collection:
-		maxChild := 0
-		for _, el := range val.Elems {
-			if d := recordDepth(el.Body); d > maxChild {
-				maxChild = d
-			}
-		}
-		return maxChild
-	default:
-		return 0
-	}
-}
-
-func validateValue(v Value) string {
+func validateValue(v Value, depth int) string {
 	if v == nil {
 		return "use a non-nil value"
 	}
@@ -509,7 +487,7 @@ func validateValue(v Value) string {
 			case List, Record, Collection:
 				return "use only scalars as list elements"
 			}
-			if hint := validateValue(el); hint != "" {
+			if hint := validateValue(el, depth); hint != "" {
 				return hint
 			}
 		}
@@ -522,6 +500,9 @@ func validateValue(v Value) string {
 			}
 		}
 	case Record:
+		if depth > maxBlockDepth {
+			return errorHints["L107"]
+		}
 		seenKeys := make(map[string]bool)
 		for _, f := range val.Fields {
 			if !utf8.ValidString(f.Key) {
@@ -536,7 +517,7 @@ func validateValue(v Value) string {
 			seenKeys[f.Key] = true
 		}
 		for _, f := range val.Fields {
-			if hint := validateValue(f.Value); hint != "" {
+			if hint := validateValue(f.Value, depth+1); hint != "" {
 				return hint
 			}
 		}
@@ -555,7 +536,7 @@ func validateValue(v Value) string {
 			seenLabels[el.Label] = true
 		}
 		for _, el := range val.Elems {
-			if hint := validateValue(el.Body); hint != "" {
+			if hint := validateValue(el.Body, depth); hint != "" {
 				return hint
 			}
 		}

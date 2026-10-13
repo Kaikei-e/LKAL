@@ -59,8 +59,6 @@ func (l *ErrorList) Error() string {
 	return b.String()
 }
 
-const maxBlockDepth = 1000
-
 var errorMessages = map[string]string{
 	"L001": "comment starts with # or ##",
 	"L002": "comment at the end of a line or inside a list",

@@ -66,10 +66,7 @@ func reportErrors(errs []*lkal.Error, jsonOutput bool, stderr io.Writer) {
 				Hint:    e.Hint,
 			}
 		}
-		if err := json.MarshalWrite(stderr, entries, jsontext.AllowInvalidUTF8(true)); err != nil {
-			fmt.Fprintln(stderr, "lkal:", err)
-			return
-		}
+		json.MarshalWrite(stderr, entries, jsontext.AllowInvalidUTF8(true))
 		fmt.Fprintln(stderr)
 		return
 	}
