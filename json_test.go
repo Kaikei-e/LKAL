@@ -1169,12 +1169,12 @@ func TestFromJSONErrors(t *testing.T) {
 		{
 			name:       "L305_L301_enum_array_with_syntax_error",
 			input:      `{"$lkal":"0.1","a":{"$enum":[1,}}`,
-			wantErrors: []string{"L305 1:29", "L301 1:32"},
+			wantErrors: []string{"L305 1:29", "L301 1:31"},
 		},
 		{
 			name:       "L105_L301_lkal_array_with_syntax_error",
 			input:      `{"$lkal": [1,}`,
-			wantErrors: []string{"L105 1:11", "L301 1:14"},
+			wantErrors: []string{"L105 1:11", "L301 1:13"},
 		},
 	}
 

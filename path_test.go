@@ -2220,3 +2220,135 @@ func TestSetAddToEmptyBlock(t *testing.T) {
 		})
 	}
 }
+
+func TestPathEmptySegmentMissing(t *testing.T) {
+	const src = "@lkal \"0.1\"\na = 1\n"
+	const missingPath = "\"\"/x"
+	const wantHint = `check the path at segment ""`
+
+	negativeTests := []struct {
+		name string
+		op   func(t *testing.T, f *File) error
+	}{
+		{
+			name: "Get",
+			op: func(t *testing.T, f *File) error {
+				t.Helper()
+				val, err := f.Get(missingPath)
+				if val != nil {
+					t.Errorf("Get(%q) value: got %v, want nil", missingPath, val)
+				}
+				return err
+			},
+		},
+		{
+			name: "Set",
+			op: func(t *testing.T, f *File) error {
+				t.Helper()
+				return f.Set(missingPath, Int(1))
+			},
+		},
+		{
+			name: "Delete",
+			op: func(t *testing.T, f *File) error {
+				t.Helper()
+				return f.Delete(missingPath)
+			},
+		},
+	}
+
+	for _, tc := range negativeTests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := pathTParse(t, "test.lkal", src)
+			origFormatBytes := f.Format()
+			if origFormatBytes == nil {
+				t.Fatalf("Format() returned nil, want non-nil")
+			}
+			origFormat := string(origFormatBytes)
+
+			var (
+				err      error
+				panicked bool
+			)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						panicked = true
+						t.Errorf("%s panicked: got %v, want no panic", tc.name, r)
+					}
+				}()
+				err = tc.op(t, f)
+			}()
+
+			if panicked {
+				return
+			}
+			if err == nil {
+				t.Fatalf("%s error: got nil, want *ErrorList", tc.name)
+			}
+			errList, ok := err.(*ErrorList)
+			if !ok {
+				t.Fatalf("%s error: got %T (%v), want *ErrorList", tc.name, err, err)
+			}
+			if len(errList.Errors) != 1 {
+				t.Fatalf("%s error count: got %d, want 1", tc.name, len(errList.Errors))
+			}
+			e := errList.Errors[0]
+			if e == nil {
+				t.Fatalf("%s Error[0]: got nil, want non-nil", tc.name)
+			}
+			if e.Code != "L402" {
+				t.Errorf("%s Code: got %q, want %q", tc.name, e.Code, "L402")
+			}
+			if e.File != "test.lkal" {
+				t.Errorf("%s File: got %q, want %q", tc.name, e.File, "test.lkal")
+			}
+			if e.Pos != (Pos{}) {
+				t.Errorf("%s Pos: got %v, want %v", tc.name, e.Pos, Pos{})
+			}
+			if e.Hint != wantHint {
+				t.Errorf("%s Hint: got %q, want %q", tc.name, e.Hint, wantHint)
+			}
+
+			fmtBytes := f.Format()
+			if fmtBytes == nil {
+				t.Fatalf("%s Format() returned nil, want non-nil", tc.name)
+			}
+			gotFormat := string(fmtBytes)
+			if gotFormat != origFormat {
+				t.Errorf("%s Format() mismatch:\ngot:\n%s\nwant:\n%s", tc.name, gotFormat, origFormat)
+			}
+		})
+	}
+
+	t.Run("positive", func(t *testing.T) {
+		const posSrc = "@lkal \"0.1\"\n\"\" { x = 1 }\n"
+		f := pathTParse(t, "test_pos.lkal", posSrc)
+		var (
+			val      Value
+			err      error
+			panicked bool
+		)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					t.Errorf("Get(%q) panicked: got %v, want no panic", missingPath, r)
+				}
+			}()
+			val, err = f.Get(missingPath)
+		}()
+		if panicked {
+			return
+		}
+		if err != nil {
+			t.Fatalf("Get(%q) error: got %v, want nil", missingPath, err)
+		}
+		if val == nil {
+			t.Fatalf("Get(%q) value: got nil, want %v", missingPath, Int(1))
+		}
+		if !Equal(val, Int(1)) {
+			t.Errorf("Get(%q) value: got %#v, want %#v", missingPath, val, Int(1))
+		}
+	})
+}
