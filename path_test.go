@@ -1704,7 +1704,7 @@ func TestParseValue(t *testing.T) {
 		},
 		{
 			name:     "dollar_key_inside_braces",
-			src:      "{ $x = 1 }",
+			src:      "{ \"$x\" = 1 }",
 			wantCode: "L205",
 			wantTag:  "L205 1:3",
 			wantHint: "rename the key",
