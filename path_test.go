@@ -1607,6 +1607,20 @@ func TestParseValue(t *testing.T) {
 			}},
 		},
 		{
+			name: "collection_trailing_comma",
+			src:  `"a" {},`,
+			want: Collection{Elems: []Elem{
+				{Label: "a", Body: Record{}},
+			}},
+		},
+		{
+			name: "collection_trailing_blank_and_comment_lines",
+			src:  "\"a\" {}\n\n### trailing comment\n",
+			want: Collection{Elems: []Elem{
+				{Label: "a", Body: Record{}},
+			}},
+		},
+		{
 			name: "leading_and_trailing_comments_and_blank_lines",
 			src: `
 ### header
@@ -1709,6 +1723,13 @@ func TestParseValue(t *testing.T) {
 			wantTag:  "L205 1:3",
 			wantHint: "rename the key",
 		},
+		{
+			name:     "collection_missing_separator_two_blocks",
+			src:      `"a" {} "b" {}`,
+			wantCode: "L106",
+			wantTag:  "L106 1:8",
+			wantHint: "separate entries with a newline or a comma",
+		},
 	}
 
 	for _, tc := range errorTests {
@@ -1803,6 +1824,398 @@ func TestPathGetSetRoundTrip(t *testing.T) {
 			}
 			if !Equal(fCopy.Data(), f.Data()) {
 				t.Errorf("Set(%q, Get(%q)) changed Data():\ngot:  %#v\nwant: %#v", p, p, fCopy.Data(), f.Data())
+			}
+		})
+	}
+}
+
+func TestPathNoAliasing(t *testing.T) {
+	t.Run("set_caller_mutation", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			path       string
+			setup      func() (Value, func())
+			wantGet    Value
+			wantFormat string
+		}{
+			{
+				name: "set_ref_mutated",
+				path: "x",
+				setup: func() (Value, func()) {
+					r := Ref{"a"}
+					return r, func() {
+						r[0] = "b"
+					}
+				},
+				wantGet:    Ref{"a"},
+				wantFormat: "@lkal \"0.1\"\n\nx = &a\n",
+			},
+			{
+				name: "set_ref_inside_list_mutated",
+				path: "x",
+				setup: func() (Value, func()) {
+					r := Ref{"a"}
+					l := List{r}
+					return l, func() {
+						r[0] = "b"
+					}
+				},
+				wantGet:    List{Ref{"a"}},
+				wantFormat: "@lkal \"0.1\"\n\nx = [&a]\n",
+			},
+			{
+				name: "set_ref_inside_record_mutated",
+				path: "x",
+				setup: func() (Value, func()) {
+					r := Ref{"a"}
+					rec := Record{Fields: []Field{{Key: "k", Value: r}}}
+					return rec, func() {
+						r[0] = "b"
+					}
+				},
+				wantGet:    Record{Fields: []Field{{Key: "k", Value: Ref{"a"}}}},
+				wantFormat: "@lkal \"0.1\"\n\nx {\n  k = &a\n}\n",
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				f := pathTParse(t, "test.lkal", "@lkal \"0.1\"\n")
+				val, mutate := tc.setup()
+				if err := f.Set(tc.path, val); err != nil {
+					t.Fatalf("Set(%q) unexpected error: %v", tc.path, err)
+				}
+				mutate()
+
+				got, err := f.Get(tc.path)
+				if err != nil {
+					t.Fatalf("Get(%q) unexpected error: %v", tc.path, err)
+				}
+				if got == nil {
+					t.Fatalf("Get(%q) returned nil Value", tc.path)
+				}
+				if !Equal(got, tc.wantGet) {
+					t.Errorf("Get(%q) after caller mutation =\ngot:  %#v\nwant: %#v", tc.path, got, tc.wantGet)
+				}
+				pathTCheckOrder(t, got, tc.wantGet)
+
+				gotFmt := string(f.Format())
+				if gotFmt != tc.wantFormat {
+					t.Errorf("Format() after caller mutation =\ngot:\n%s\nwant:\n%s", gotFmt, tc.wantFormat)
+				}
+			})
+		}
+	})
+
+	t.Run("get_ref_caller_mutation", func(t *testing.T) {
+		specData, err := os.ReadFile("testdata/conformance/valid/spec_example.lkal")
+		if err != nil {
+			t.Fatalf("failed to read spec_example.lkal: %v", err)
+		}
+
+		tests := []struct {
+			name    string
+			src     string
+			path    string
+			mutate  func(t *testing.T, v Value)
+			wantGet Value
+		}{
+			{
+				name: "spec_example_secret",
+				src:  string(specData),
+				path: "service/web/container/app/secret",
+				mutate: func(t *testing.T, v Value) {
+					r, ok := v.(Ref)
+					if !ok {
+						t.Fatalf("expected Ref, got %T", v)
+					}
+					if len(r) == 0 {
+						t.Fatalf("expected non-empty Ref")
+					}
+					r[0] = "tampered"
+				},
+				wantGet: Ref{"secret", "db-creds"},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				f := pathTParse(t, "spec_example.lkal", tc.src)
+				origFormat := string(f.Format())
+
+				got1, err := f.Get(tc.path)
+				if err != nil {
+					t.Fatalf("Get(%q) unexpected error: %v", tc.path, err)
+				}
+				if got1 == nil {
+					t.Fatalf("Get(%q) returned nil Value", tc.path)
+				}
+
+				tc.mutate(t, got1)
+
+				got2, err := f.Get(tc.path)
+				if err != nil {
+					t.Fatalf("second Get(%q) unexpected error: %v", tc.path, err)
+				}
+				if got2 == nil {
+					t.Fatalf("second Get(%q) returned nil Value", tc.path)
+				}
+				if !Equal(got2, tc.wantGet) {
+					t.Errorf("second Get(%q) =\ngot:  %#v\nwant: %#v", tc.path, got2, tc.wantGet)
+				}
+				pathTCheckOrder(t, got2, tc.wantGet)
+
+				gotFmt := string(f.Format())
+				if gotFmt != origFormat {
+					t.Errorf("Format() after caller modified Get result =\ngot:\n%s\nwant:\n%s", gotFmt, origFormat)
+				}
+			})
+		}
+	})
+
+	t.Run("get_list_caller_mutation", func(t *testing.T) {
+		specData, err := os.ReadFile("testdata/conformance/valid/spec_example.lkal")
+		if err != nil {
+			t.Fatalf("failed to read spec_example.lkal: %v", err)
+		}
+
+		tests := []struct {
+			name    string
+			src     string
+			path    string
+			mutate  func(t *testing.T, v Value)
+			wantGet Value
+		}{
+			{
+				name: "spec_example_args",
+				src:  string(specData),
+				path: "service/web/container/app/args",
+				mutate: func(t *testing.T, v Value) {
+					l, ok := v.(List)
+					if !ok {
+						t.Fatalf("expected List, got %T", v)
+					}
+					if len(l) == 0 {
+						t.Fatalf("expected non-empty List")
+					}
+					l[0] = String("--tampered")
+				},
+				wantGet: List{String("--port"), String("8080")},
+			},
+			{
+				name: "list_containing_ref_element",
+				src:  "@lkal \"0.1\"\n\nitems = [&a, &b]\n",
+				path: "items",
+				mutate: func(t *testing.T, v Value) {
+					l, ok := v.(List)
+					if !ok {
+						t.Fatalf("expected List, got %T", v)
+					}
+					if len(l) == 0 {
+						t.Fatalf("expected non-empty List")
+					}
+					r, ok := l[0].(Ref)
+					if !ok {
+						t.Fatalf("expected Ref element in List, got %T", l[0])
+					}
+					r[0] = "tampered"
+				},
+				wantGet: List{Ref{"a"}, Ref{"b"}},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				f := pathTParse(t, "test.lkal", tc.src)
+				origFormat := string(f.Format())
+				origParsed := pathTParse(t, "", origFormat)
+
+				got1, err := f.Get(tc.path)
+				if err != nil {
+					t.Fatalf("Get(%q) unexpected error: %v", tc.path, err)
+				}
+				if got1 == nil {
+					t.Fatalf("Get(%q) returned nil Value", tc.path)
+				}
+
+				tc.mutate(t, got1)
+
+				got2, err := f.Get(tc.path)
+				if err != nil {
+					t.Fatalf("second Get(%q) unexpected error: %v", tc.path, err)
+				}
+				if got2 == nil {
+					t.Fatalf("second Get(%q) returned nil Value", tc.path)
+				}
+				if !Equal(got2, tc.wantGet) {
+					t.Errorf("second Get(%q) =\ngot:  %#v\nwant: %#v", tc.path, got2, tc.wantGet)
+				}
+				pathTCheckOrder(t, got2, tc.wantGet)
+
+				gotFmt := string(f.Format())
+				if gotFmt != origFormat {
+					t.Errorf("Format() after caller modified Get List =\ngot:\n%s\nwant:\n%s", gotFmt, origFormat)
+				}
+
+				pathTCheckEqualAndOrder(t, f.Data(), origParsed.Data())
+			})
+		}
+	})
+}
+
+func TestSetErrorOrder(t *testing.T) {
+	specData, err := os.ReadFile("testdata/conformance/valid/spec_example.lkal")
+	if err != nil {
+		t.Fatalf("failed to read spec_example.lkal: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		src      string
+		path     string
+		value    Value
+		wantCode string
+		wantMsg  string
+		wantHint string
+	}{
+		{
+			name:     "list_decimal_invalid_before_nil",
+			src:      string(specData),
+			path:     "new_list",
+			value:    List{Decimal("1."), nil},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "write a decimal such as 0.25",
+		},
+		{
+			name:     "list_enum_invalid_before_non_scalar",
+			src:      string(specData),
+			path:     "new_list",
+			value:    List{Enum("1x"), List{}},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "write an enum name that starts with a letter or _",
+		},
+		{
+			name:     "list_nil_before_decimal_invalid",
+			src:      string(specData),
+			path:     "new_list",
+			value:    List{nil, Decimal("1.")},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "use a non-nil value",
+		},
+		{
+			name:     "collection_element_path_list_nil",
+			src:      string(specData),
+			path:     "service/new",
+			value:    List{nil},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "use a record for a collection element",
+		},
+		{
+			name:     "collection_element_path_collection_empty",
+			src:      string(specData),
+			path:     "service/new",
+			value:    Collection{},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "use a record for a collection element",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := pathTParse(t, "spec_example.lkal", tc.src)
+			origFormat := f.Format()
+			err := f.Set(tc.path, tc.value)
+			if err == nil {
+				t.Fatalf("Set(%q, %#v) succeeded unexpectedly, want error", tc.path, tc.value)
+			}
+			errList, ok := err.(*ErrorList)
+			if !ok {
+				t.Fatalf("Set(%q) error type =\ngot:  %T (%v)\nwant: *ErrorList", tc.path, err, err)
+			}
+			if len(errList.Errors) != 1 {
+				t.Fatalf("Set(%q) error count =\ngot:  %d (%v)\nwant: 1", tc.path, len(errList.Errors), errList)
+			}
+			e := errList.Errors[0]
+			if e == nil {
+				t.Fatalf("Set(%q) error is nil", tc.path)
+			}
+			if e.Code != tc.wantCode {
+				t.Errorf("Code =\ngot:  %q\nwant: %q", e.Code, tc.wantCode)
+			}
+			if e.Pos != (Pos{}) {
+				t.Errorf("Pos =\ngot:  %v\nwant: zero Pos", e.Pos)
+			}
+			if e.File != "spec_example.lkal" {
+				t.Errorf("File =\ngot:  %q\nwant: %q", e.File, "spec_example.lkal")
+			}
+			if e.Msg != tc.wantMsg {
+				t.Errorf("Msg =\ngot:  %q\nwant: %q", e.Msg, tc.wantMsg)
+			}
+			if e.Hint != tc.wantHint {
+				t.Errorf("Hint =\ngot:  %q\nwant: %q", e.Hint, tc.wantHint)
+			}
+			if !bytes.Equal(f.Format(), origFormat) {
+				t.Errorf("File format changed after failed Set:\ngot:\n%s\nwant:\n%s", string(f.Format()), string(origFormat))
+			}
+		})
+	}
+}
+
+func TestSetAddToEmptyBlock(t *testing.T) {
+	tests := []struct {
+		name       string
+		src        string
+		path       string
+		value      Value
+		wantFormat string
+		wantGet    Value
+	}{
+		{
+			name:       "add_to_empty_record_block",
+			src:        "@lkal \"0.1\"\n\nserver {}\n",
+			path:       "server/mem",
+			value:      Quantity{Number: "1.5", Unit: "Gi"},
+			wantFormat: "@lkal \"0.1\"\n\nserver {\n  mem = 1.5Gi\n}\n",
+			wantGet:    Quantity{Number: "1.5", Unit: "Gi"},
+		},
+		{
+			name:       "add_to_empty_element_body",
+			src:        "@lkal \"0.1\"\n\nport \"http\" {}\n",
+			path:       "port/http/number",
+			value:      Int(80),
+			wantFormat: "@lkal \"0.1\"\n\nport \"http\" {\n  number = 80\n}\n",
+			wantGet:    Int(80),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := pathTParse(t, "test.lkal", tc.src)
+			err := f.Set(tc.path, tc.value)
+			if err != nil {
+				t.Fatalf("Set(%q, %#v) unexpected error: %v", tc.path, tc.value, err)
+			}
+			gotFormat := string(f.Format())
+			if gotFormat != tc.wantFormat {
+				t.Errorf("Format() =\ngot:\n%s\nwant:\n%s", gotFormat, tc.wantFormat)
+			}
+			parsed := pathTParse(t, "", tc.wantFormat)
+			pathTCheckEqualAndOrder(t, f.Data(), parsed.Data())
+
+			gotVal, getErr := f.Get(tc.path)
+			if getErr != nil {
+				t.Fatalf("Get(%q) unexpected error: %v", tc.path, getErr)
+			}
+			if gotVal == nil {
+				t.Fatalf("Get(%q) returned nil Value", tc.path)
+			}
+			if !Equal(gotVal, tc.wantGet) {
+				t.Errorf("Get(%q) =\ngot:  %#v\nwant: %#v", tc.path, gotVal, tc.wantGet)
 			}
 		})
 	}

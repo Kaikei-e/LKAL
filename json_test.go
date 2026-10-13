@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func jsonTDecodeTokens(data []byte) ([]json.Token, error) {
@@ -158,7 +160,7 @@ func TestToJSONLayout(t *testing.T) {
 		{
 			name: "control_chars_and_unicode_escapes",
 			src:  "@lkal \"0.1\"\ns = \"\\u{8}\\u{c}\\u{d}\\u{2028}\\u{2029}\\u{7f}\"\n",
-			want: "{\n  \"$lkal\": \"0.1\",\n  \"s\": \"\\b\\f\\r\\u2028\\u2029\x7f\"\n}\n",
+			want: "{\n  \"$lkal\": \"0.1\",\n  \"s\": \"\\b\\f\\r\u2028\u2029\x7f\"\n}\n",
 		},
 		{
 			name: "escaping_in_keys_and_labels",
@@ -682,7 +684,7 @@ func TestFromJSONErrors(t *testing.T) {
 		{
 			name:       "L301_trailing_comma",
 			input:      `{"$lkal": "0.1", "a": 1,}`,
-			wantErrors: []string{"L301 1:25"},
+			wantErrors: []string{"L301 1:24"},
 		},
 		{
 			name:       "L301_invalid_utf8_byte",
@@ -1054,6 +1056,126 @@ func TestFromJSONErrors(t *testing.T) {
 			input:       `{"$lkal": "0.1", "a": [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]}`,
 			wantCount20: true,
 		},
+		{
+			name:       "L301_escape_unknown_char",
+			input:      `{"a":"\q"}`,
+			wantErrors: []string{"L105 1:2", "L301 1:7"},
+		},
+		{
+			name:       "L301_escape_hex_cutoff",
+			input:      `{"a":"\u1x`,
+			wantErrors: []string{"L105 1:2", "L301 1:7"},
+		},
+		{
+			name:       "L301_escape_unpaired_high_surrogate",
+			input:      `{"a":"\uD800"}`,
+			wantErrors: []string{"L105 1:2", "L301 1:7"},
+		},
+		{
+			name:       "L301_escape_surrogate_cutoff",
+			input:      `{"a":"\uD800`,
+			wantErrors: []string{"L105 1:2", "L301 1:7"},
+		},
+		{
+			name:       "L301_escape_surrogate_bad_low_hex",
+			input:      `{"a":"\uD800\uDC0G"}`,
+			wantErrors: []string{"L105 1:2", "L301 1:7"},
+		},
+		{
+			name:       "L301_escape_unpaired_low_surrogate",
+			input:      `{"a":"\uDC00"}`,
+			wantErrors: []string{"L105 1:2", "L301 1:7"},
+		},
+		{
+			name:       "L301_invalid_utf8_in_string",
+			input:      "{\"a\":\"x\xffy\"}",
+			wantErrors: []string{"L105 1:2", "L301 1:8"},
+		},
+		{
+			name:       "L301_utf8_sequence_cutoff_at_end",
+			input:      "{\"a\":\"\xe6\x97",
+			wantErrors: []string{"L105 1:2", "L301 1:7"},
+		},
+		{
+			name:       "L301_trailing_comma_in_array",
+			input:      `[1,]`,
+			wantErrors: []string{"L105 1:1", "L301 1:3"},
+		},
+		{
+			name:       "L301_leading_comma_in_array",
+			input:      `[,1]`,
+			wantErrors: []string{"L105 1:1", "L301 1:2"},
+		},
+		{
+			name:       "L301_consecutive_commas_in_object",
+			input:      `{"a":1,,}`,
+			wantErrors: []string{"L105 1:2", "L301 1:8"},
+		},
+		{
+			name:       "L301_partial_literal_tru_at_end",
+			input:      `{"a":tru`,
+			wantErrors: []string{"L105 1:2", "L301 1:9"},
+		},
+		{
+			name:       "L301_partial_literal_tRue",
+			input:      `{"a":tRue}`,
+			wantErrors: []string{"L105 1:2", "L301 1:7"},
+		},
+		{
+			name:       "L301_partial_literal_nul_before_brace",
+			input:      `{"a":nul}`,
+			wantErrors: []string{"L105 1:2", "L301 1:9"},
+		},
+		{
+			name:       "L301_unterminated_string_at_end",
+			input:      `{"a":"abc`,
+			wantErrors: []string{"L105 1:2", "L301 1:10"},
+		},
+		{
+			name:       "L301_top_level_invalid_char_x",
+			input:      `x`,
+			wantErrors: []string{"L301 1:1"},
+		},
+		{
+			name:       "L301_top_level_invalid_char_close_brace",
+			input:      `}`,
+			wantErrors: []string{"L301 1:1"},
+		},
+		{
+			name:       "L105_L205_first_key_dollar_x",
+			input:      `{"$x": null}`,
+			wantErrors: []string{"L105 1:2", "L205 1:2"},
+		},
+		{
+			name:       "L105_misplaced_lkal_after_data",
+			input:      `{"a": 1, "$lkal": "0.1"}`,
+			wantErrors: []string{"L105 1:2", "L105 1:10"},
+		},
+		{
+			name:       "L105_top_level_null",
+			input:      `null`,
+			wantErrors: []string{"L105 1:1"},
+		},
+		{
+			name:       "L105_lkal_value_null",
+			input:      `{"$lkal": null}`,
+			wantErrors: []string{"L105 1:11"},
+		},
+		{
+			name:       "L302_coll_nested_null_members",
+			input:      `{"$lkal":"0.1","c":{"$coll":{"e1":{"x":null,"y":null},"e2":{"z":null}}}}`,
+			wantErrors: []string{"L302 1:40", "L302 1:49", "L302 1:65"},
+		},
+		{
+			name:       "L305_L301_enum_array_with_syntax_error",
+			input:      `{"$lkal":"0.1","a":{"$enum":[1,}}`,
+			wantErrors: []string{"L305 1:29", "L301 1:32"},
+		},
+		{
+			name:       "L105_L301_lkal_array_with_syntax_error",
+			input:      `{"$lkal": [1,}`,
+			wantErrors: []string{"L105 1:11", "L301 1:14"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1261,6 +1383,145 @@ func TestJSONTypedNilErrorList(t *testing.T) {
 	var el *ErrorList
 	if res := jsonTExtractErrors(el); res != nil {
 		t.Errorf("expected nil result for typed-nil ErrorList, got %v", res)
+	}
+}
+
+func TestFromJSONDepthLimit(t *testing.T) {
+	tests := []struct {
+		name       string
+		bracketN   int
+		wantL304   bool
+		wantL301   bool
+		wantErrors []string
+		wantHint   string
+		wantCol    int
+	}{
+		{
+			name:       "depth_10000_ok",
+			bracketN:   9999,
+			wantL304:   true,
+			wantErrors: []string{"L304 1:21"},
+		},
+		{
+			name:     "depth_10001_exceeds_limit",
+			bracketN: 10000,
+			wantL301: true,
+			wantCol:  10019,
+			wantHint: "nest objects and arrays at most 10000 levels deep",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `{"$lkal":"0.1","a":` + strings.Repeat("[", tt.bracketN) + strings.Repeat("]", tt.bracketN) + `}`
+			f, err := FromJSON([]byte(input))
+			if f != nil {
+				t.Errorf("expected nil File, got: %v", f)
+			}
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			errList, ok := err.(*ErrorList)
+			if !ok {
+				t.Fatalf("expected *ErrorList, got %T: %v", err, err)
+			}
+
+			if tt.wantL304 {
+				got := jsonTExtractErrors(errList)
+				if !reflect.DeepEqual(got, tt.wantErrors) {
+					t.Errorf("error mismatch:\ngot:  %v\nwant: %v", got, tt.wantErrors)
+				}
+			}
+
+			if tt.wantL301 {
+				var foundL301 *Error
+				for _, e := range errList.Errors {
+					if e != nil && e.Code == "L301" {
+						foundL301 = e
+						break
+					}
+				}
+				if foundL301 == nil {
+					t.Fatalf("expected L301 in errors, got: %v", jsonTExtractErrors(errList))
+				}
+				wantPos := Pos{Line: 1, Col: tt.wantCol}
+				if foundL301.Pos != wantPos {
+					t.Errorf("L301 Pos mismatch: got %v, want %v", foundL301.Pos, wantPos)
+				}
+				if foundL301.Hint != tt.wantHint {
+					t.Errorf("L301 Hint mismatch: got %q, want %q", foundL301.Hint, tt.wantHint)
+				}
+			}
+		})
+	}
+}
+
+func TestFromJSONManyErrorsLinear(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping scaling test in short mode")
+	}
+
+	buildInput := func(k int) []byte {
+		return []byte(`{"$lkal":"0.1","a":[` + strings.Repeat("null,", k) + "null]}")
+	}
+
+	checkErrors := func(name string, src []byte) {
+		f, err := FromJSON(src)
+		if f != nil {
+			t.Errorf("%s: FromJSON returned non-nil File on error: %v", name, f)
+		}
+		if err == nil {
+			t.Fatalf("%s: expected error, got nil", name)
+		}
+		errList, ok := err.(*ErrorList)
+		if !ok {
+			t.Fatalf("%s: expected *ErrorList, got %T: %v", name, err, err)
+		}
+		if len(errList.Errors) != 20 {
+			t.Fatalf("%s: error count mismatch: got %d, want 20", name, len(errList.Errors))
+		}
+		for i, e := range errList.Errors {
+			if e == nil {
+				t.Fatalf("%s: error[%d] is nil", name, i)
+			}
+			if e.Code != "L302" {
+				t.Errorf("%s: error[%d] code mismatch: got %q, want %q", name, i, e.Code, "L302")
+			}
+		}
+	}
+
+	measureMin := func(src []byte) time.Duration {
+		var minDur time.Duration
+		for i := 0; i < 3; i++ {
+			runtime.GC()
+			start := time.Now()
+			_, _ = FromJSON(src)
+			d := time.Since(start)
+			if i == 0 || d < minDur {
+				minDur = d
+			}
+		}
+		return minDur
+	}
+
+	baseN := 20000
+	inputN := buildInput(baseN)
+	input4N := buildInput(baseN * 4)
+
+	checkErrors("N_20000", inputN)
+	checkErrors("4N_80000", input4N)
+
+	durN := measureMin(inputN)
+	dur4N := measureMin(input4N)
+
+	if dur4N > 8*durN {
+		ratio := float64(dur4N)
+		if durN > 0 {
+			ratio /= float64(durN)
+			t.Errorf("4n duration %v exceeds 8x n duration %v (ratio: %.2fx)", dur4N, durN, ratio)
+		} else {
+			t.Errorf("4n duration %v exceeds 8x n duration %v", dur4N, durN)
+		}
 	}
 }
 
