@@ -1,0 +1,5 @@
+{
+  "ref1": "secret/\"db creds\"",
+  "ref2": "labels/\"app.kubernetes.io/name\"",
+  "ref3": "a/\"\""
+}

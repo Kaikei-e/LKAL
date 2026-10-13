@@ -2,6 +2,7 @@ package lkal
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 	"unicode/utf8"
 )
@@ -60,6 +61,41 @@ func FuzzParse(f *testing.F) {
 			d := file.Data()
 			if !Equal(d, d) {
 				t.Errorf("Equal(Data(), Data()) returned false")
+			}
+
+			j, err := ToJSON(file, false)
+			if err != nil {
+				t.Fatalf("ToJSON(false) failed: %v", err)
+			}
+			if !json.Valid(j) {
+				t.Errorf("ToJSON(false) produced invalid JSON: %s", j)
+			}
+
+			plain, err := ToJSON(file, true)
+			if err != nil {
+				t.Fatalf("ToJSON(plain) failed: %v", err)
+			}
+			if !json.Valid(plain) {
+				t.Errorf("ToJSON(plain) produced invalid JSON: %s", plain)
+			}
+
+			g, err := FromJSON(j)
+			if err != nil {
+				t.Fatalf("FromJSON(ToJSON) failed: %v", err)
+			}
+			if g == nil {
+				t.Fatalf("FromJSON returned nil File")
+			}
+			if !Equal(g.Data(), file.Data()) {
+				t.Errorf("Equal(g.Data(), file.Data()) returned false")
+			}
+
+			j2, err := ToJSON(g, false)
+			if err != nil {
+				t.Fatalf("ToJSON(g, false) failed: %v", err)
+			}
+			if !bytes.Equal(j2, j) {
+				t.Errorf("roundtrip ToJSON mismatch:\ngot:\n%s\nwant:\n%s", j2, j)
 			}
 			return
 		}

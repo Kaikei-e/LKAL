@@ -1,0 +1,15 @@
+@lkal "0.1"
+
+service "web" {
+  port "http" {
+    number = 80
+  }
+  port "https" {
+    number = 443
+  }
+}
+service "api" {
+  port "grpc" {
+    number = 50051
+  }
+}

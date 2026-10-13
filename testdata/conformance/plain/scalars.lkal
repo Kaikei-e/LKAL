@@ -1,0 +1,11 @@
+@lkal "0.1"
+
+str = "hello"
+num = 42
+neg = -17
+dec = 0.25
+flag = true
+proto = .tcp
+mem = 512Mi
+target = &service/web
+items = [1, 2, 3]
