@@ -1,0 +1,12 @@
+@lkal "0.1"
+
+simple { a = 1, b = "hello", c = [1, 2] }
+trailing_comma { a = 1, }
+has_nested { inner { x = 1 } }
+has_raw { s = "line1\nline2" }
+empty_multi {
+
+}
+multi_one {
+  x = 10
+}

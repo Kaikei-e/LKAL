@@ -1,0 +1,10 @@
+@lkal "0.1"
+
+content =
+  \\line1
+  \\line2
+  \\line3
+trailing_nl =
+  \\hello
+  \\
+with_cr = "line1\r\nline2"

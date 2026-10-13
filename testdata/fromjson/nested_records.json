@@ -1,0 +1,21 @@
+{
+  "$lkal": "0.1",
+  "d": {},
+  "c": {
+    "$coll": {
+      "x": {}
+    }
+  },
+  "pkg": {
+    "true": "reserved",
+    "app.kubernetes.io/name": "my-app",
+    "script": "echo start\necho end"
+  },
+  "service": {
+    "$coll": {
+      "api": {
+        "port": 80
+      }
+    }
+  }
+}

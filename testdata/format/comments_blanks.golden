@@ -1,0 +1,16 @@
+### Head comment 1
+
+### Head comment 2
+
+@lkal "0.1"
+
+### Comment for config
+
+config {
+  ### Child comment
+  enabled = true
+
+  ### Trailing in config
+}
+
+### Document trailing comment

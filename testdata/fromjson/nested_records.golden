@@ -1,0 +1,14 @@
+@lkal "0.1"
+
+d {}
+c "x" {}
+pkg {
+  "true" = "reserved"
+  "app.kubernetes.io/name" = "my-app"
+  script =
+    \\echo start
+    \\echo end
+}
+service "api" {
+  port = 80
+}
