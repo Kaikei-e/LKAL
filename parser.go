@@ -2,6 +2,7 @@ package lkal
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -614,13 +615,20 @@ func buildRecord(b *block) Record {
 func buildValue(n node) Value {
 	switch v := n.(type) {
 	case *scalarNode:
+		if r, ok := v.val.(Ref); ok {
+			return slices.Clone(r)
+		}
 		return v.val
 	case *rawNode:
 		return String(strings.Join(v.lines, "\n"))
 	case *listNode:
 		list := make(List, len(v.elems))
 		for i, el := range v.elems {
-			list[i] = el.val
+			if r, ok := el.val.(Ref); ok {
+				list[i] = slices.Clone(r)
+			} else {
+				list[i] = el.val
+			}
 		}
 		return list
 	}

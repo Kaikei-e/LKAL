@@ -1,9 +1,9 @@
 package lkal
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
 // Format parses src and returns its canonical form. On a parse error it
@@ -21,33 +21,27 @@ func (f *File) Format() []byte {
 	if f == nil {
 		return nil
 	}
-	var b strings.Builder
+	var b bytes.Buffer
 
 	for i, c := range f.head {
 		if i > 0 && c.blankBefore {
 			b.WriteByte('\n')
 		}
-		writeComment(&b, 0, c.text)
+		writeComment(&b, "", c.text)
 	}
-	if len(f.head) > 0 {
-		lastCommentLine := f.head[len(f.head)-1].pos.Line
-		if f.versionPos.Line > lastCommentLine+1 {
-			b.WriteByte('\n')
-		}
+	if len(f.head) > 0 && f.versionPos.Line > f.head[len(f.head)-1].pos.Line+1 {
+		b.WriteByte('\n')
 	}
 
 	b.WriteString("@lkal ")
 	b.WriteString(quoteString(f.version))
 	b.WriteByte('\n')
 
-	hasBodyItems := f.body != nil && (len(f.body.entries) > 0 || len(f.body.trailing) > 0)
-	if !hasBodyItems {
-		return []byte(b.String())
+	if len(f.body.entries) > 0 || len(f.body.trailing) > 0 {
+		b.WriteByte('\n')
+		formatBlockItems(&b, f.body, 0)
 	}
-
-	b.WriteByte('\n')
-	formatBlockItems(&b, f.body, 0)
-	return []byte(b.String())
+	return b.Bytes()
 }
 
 // FormatValue returns the canonical text of one value, without a trailing newline.
@@ -55,150 +49,45 @@ func FormatValue(v Value) []byte {
 	if v == nil {
 		return nil
 	}
-	var b strings.Builder
+	var b bytes.Buffer
 	switch val := v.(type) {
 	case Int, Decimal, Bool, Enum, Quantity, Ref:
 		b.WriteString(formatScalarValue(val))
 	case String:
 		s := string(val)
 		if isRawCandidate(s) {
-			lines := strings.Split(s, "\n")
-			for i, line := range lines {
-				if i > 0 {
-					b.WriteByte('\n')
-				}
-				b.WriteString(`\\`)
-				b.WriteString(line)
-			}
+			writeRawLines(&b, s, "")
 		} else {
 			b.WriteString(quoteString(s))
 		}
 	case List:
-		b.WriteString(formatValueList(val))
+		writeList(&b, len(val), func(i int) Value { return val[i] })
 	case Record:
-		if len(val.Fields) == 0 {
-			b.WriteString("{}")
-		} else {
-			b.WriteString("{\n")
-			formatValueRecordFields(&b, val, 1)
-			b.WriteString("}")
-		}
+		writeBlock(&b, blockFromRecord(val), 0)
 	case Collection:
 		for i, elem := range val.Elems {
 			if i > 0 {
 				b.WriteByte('\n')
 			}
 			b.WriteString(quoteString(elem.Label))
-			if len(elem.Body.Fields) == 0 {
-				b.WriteString(" {}")
-			} else {
-				b.WriteString(" {\n")
-				formatValueRecordFields(&b, elem.Body, 1)
-				b.WriteString("}")
-			}
+			b.WriteByte(' ')
+			writeBlock(&b, blockFromRecord(elem.Body), 0)
 		}
 	}
-	return []byte(b.String())
+	return b.Bytes()
 }
 
-func formatValueList(l List) string {
-	if len(l) == 0 {
-		return "[]"
-	}
-	var b strings.Builder
-	b.WriteByte('[')
-	for i, elem := range l {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(formatScalarValue(elem))
-	}
-	b.WriteByte(']')
-	return b.String()
-}
-
-func formatValueRecordFields(b *strings.Builder, r Record, level int) {
-	indent := strings.Repeat("  ", level)
-	childIndent := strings.Repeat("  ", level+1)
-	for _, f := range r.Fields {
-		keyText := formatKey(f.Key)
-		switch fv := f.Value.(type) {
-		case Int, Decimal, Bool, Enum, Quantity, Ref:
-			b.WriteString(indent)
-			b.WriteString(keyText)
-			b.WriteString(" = ")
-			b.WriteString(formatScalarValue(fv))
-			b.WriteByte('\n')
-		case String:
-			s := string(fv)
-			if isRawCandidate(s) {
-				b.WriteString(indent)
-				b.WriteString(keyText)
-				b.WriteString(" =\n")
-				lines := strings.Split(s, "\n")
-				for _, line := range lines {
-					b.WriteString(childIndent)
-					b.WriteString(`\\`)
-					b.WriteString(line)
-					b.WriteByte('\n')
-				}
-			} else {
-				b.WriteString(indent)
-				b.WriteString(keyText)
-				b.WriteString(" = ")
-				b.WriteString(quoteString(s))
-				b.WriteByte('\n')
-			}
-		case List:
-			b.WriteString(indent)
-			b.WriteString(keyText)
-			b.WriteString(" = ")
-			b.WriteString(formatValueList(fv))
-			b.WriteByte('\n')
-		case Record:
-			if len(fv.Fields) == 0 {
-				b.WriteString(indent)
-				b.WriteString(keyText)
-				b.WriteString(" {}\n")
-			} else {
-				b.WriteString(indent)
-				b.WriteString(keyText)
-				b.WriteString(" {\n")
-				formatValueRecordFields(b, fv, level+1)
-				b.WriteString(indent)
-				b.WriteString("}\n")
-			}
-		case Collection:
-			for _, elem := range fv.Elems {
-				b.WriteString(indent)
-				b.WriteString(keyText)
-				b.WriteByte(' ')
-				b.WriteString(quoteString(elem.Label))
-				if len(elem.Body.Fields) == 0 {
-					b.WriteString(" {}\n")
-				} else {
-					b.WriteString(" {\n")
-					formatValueRecordFields(b, elem.Body, level+1)
-					b.WriteString(indent)
-					b.WriteString("}\n")
-				}
-			}
-		}
-	}
-}
-
-func formatBlockItems(b *strings.Builder, blk *block, d int) {
-	if blk == nil {
-		return
-	}
+func formatBlockItems(b *bytes.Buffer, blk *block, d int) {
+	indent := strings.Repeat("  ", d)
+	childIndent := indent + "  "
 	isFirstItem := true
 	for _, ent := range blk.entries {
 		if !isFirstItem {
-			itemBlankBefore := ent.blankBefore
+			blank := ent.blankBefore
 			if len(ent.comments) > 0 {
-				itemBlankBefore = ent.comments[0].blankBefore
+				blank = ent.comments[0].blankBefore
 			}
-			if itemBlankBefore {
+			if blank {
 				b.WriteByte('\n')
 			}
 		}
@@ -208,28 +97,26 @@ func formatBlockItems(b *strings.Builder, blk *block, d int) {
 			if i > 0 && c.blankBefore {
 				b.WriteByte('\n')
 			}
-			writeComment(b, d, c.text)
+			writeComment(b, indent, c.text)
 		}
 		if len(ent.comments) > 0 && ent.blankBefore {
 			b.WriteByte('\n')
 		}
 
-		formatEntry(b, ent, d)
+		formatEntry(b, ent, d, indent, childIndent)
 	}
 
 	for _, c := range blk.trailing {
-		if !isFirstItem {
-			if c.blankBefore {
-				b.WriteByte('\n')
-			}
+		if !isFirstItem && c.blankBefore {
+			b.WriteByte('\n')
 		}
 		isFirstItem = false
-		writeComment(b, d, c.text)
+		writeComment(b, indent, c.text)
 	}
 }
 
-func writeComment(b *strings.Builder, d int, text string) {
-	b.WriteString(strings.Repeat("  ", d))
+func writeComment(b *bytes.Buffer, indent, text string) {
+	b.WriteString(indent)
 	b.WriteString("###")
 	if text != "" {
 		b.WriteByte(' ')
@@ -238,91 +125,43 @@ func writeComment(b *strings.Builder, d int, text string) {
 	b.WriteByte('\n')
 }
 
-func formatEntry(b *strings.Builder, ent *entry, d int) {
-	indent := strings.Repeat("  ", d)
+func formatEntry(b *bytes.Buffer, ent *entry, d int, indent, childIndent string) {
 	switch ent.kind {
 	case entryAssign:
-		formatAssign(b, ent, d)
+		formatAssign(b, ent, indent, childIndent)
 	case entryRecord:
-		headerPrefix := indent + formatKey(ent.key)
-		formatBody(b, headerPrefix, ent.body, d)
+		formatBody(b, indent+formatKey(ent.key), ent.body, d)
 	case entryElem:
-		headerPrefix := indent + formatKey(ent.key) + " " + quoteString(ent.label)
-		formatBody(b, headerPrefix, ent.body, d)
+		formatBody(b, indent+formatKey(ent.key)+" "+quoteString(ent.label), ent.body, d)
 	}
 }
 
-func formatAssign(b *strings.Builder, ent *entry, d int) {
-	indent := strings.Repeat("  ", d)
-	childIndent := strings.Repeat("  ", d+1)
-	keyText := formatKey(ent.key)
-
-	str, isRaw := getRawCandidateString(ent.value)
-	if isRaw {
-		b.WriteString(indent)
-		b.WriteString(keyText)
+func formatAssign(b *bytes.Buffer, ent *entry, indent, childIndent string) {
+	b.WriteString(indent)
+	b.WriteString(formatKey(ent.key))
+	if s, ok := nodeString(ent.value); ok && isRawCandidate(s) {
 		b.WriteString(" =\n")
-		lines := strings.Split(str, "\n")
-		for _, line := range lines {
-			b.WriteString(childIndent)
-			b.WriteString(`\\`)
-			b.WriteString(line)
-			b.WriteByte('\n')
-		}
+		writeRawLines(b, s, childIndent)
+		b.WriteByte('\n')
 		return
 	}
-
-	switch valNode := ent.value.(type) {
-	case *rawNode:
-		s := strings.Join(valNode.lines, "\n")
-		b.WriteString(indent)
-		b.WriteString(keyText)
-		b.WriteString(" = ")
-		b.WriteString(quoteString(s))
-		b.WriteByte('\n')
-	case *scalarNode:
-		b.WriteString(indent)
-		b.WriteString(keyText)
-		b.WriteString(" = ")
-		b.WriteString(formatScalarValue(valNode.val))
-		b.WriteByte('\n')
-	case *listNode:
-		if len(valNode.elems) == 0 {
-			b.WriteString(indent)
-			b.WriteString(keyText)
-			b.WriteString(" = []\n")
-		} else if valNode.oneLine {
-			b.WriteString(indent)
-			b.WriteString(keyText)
-			b.WriteString(" = [")
-			for i, elem := range valNode.elems {
-				if i > 0 {
-					b.WriteString(", ")
-				}
-				b.WriteString(formatScalarValue(elem.val))
-			}
-			b.WriteString("]\n")
-		} else {
-			b.WriteString(indent)
-			b.WriteString(keyText)
-			b.WriteString(" = [\n")
-			for _, elem := range valNode.elems {
-				b.WriteString(childIndent)
-				b.WriteString(formatScalarValue(elem.val))
-				b.WriteString(",\n")
-			}
-			b.WriteString(indent)
-			b.WriteString("]\n")
+	if l, ok := ent.value.(*listNode); ok && !l.oneLine && len(l.elems) > 0 {
+		b.WriteString(" = [\n")
+		for _, elem := range l.elems {
+			b.WriteString(childIndent)
+			b.WriteString(formatScalarValue(elem.val))
+			b.WriteString(",\n")
 		}
+		b.WriteString(indent)
+		b.WriteString("]\n")
+		return
 	}
+	b.WriteString(" = ")
+	writeInlineValue(b, ent.value)
+	b.WriteByte('\n')
 }
 
-func formatBody(b *strings.Builder, headerPrefix string, body *block, d int) {
-	if body == nil || (len(body.entries) == 0 && len(body.trailing) == 0) {
-		b.WriteString(headerPrefix)
-		b.WriteString(" {}\n")
-		return
-	}
+func formatBody(b *bytes.Buffer, headerPrefix string, body *block, d int) {
 	if isOneLineBlock(body) {
 		b.WriteString(headerPrefix)
 		b.WriteString(" { ")
@@ -332,52 +171,67 @@ func formatBody(b *strings.Builder, headerPrefix string, body *block, d int) {
 			}
 			b.WriteString(formatKey(ent.key))
 			b.WriteString(" = ")
-			b.WriteString(formatInlineValue(ent.value))
+			writeInlineValue(b, ent.value)
 		}
 		b.WriteString(" }\n")
 		return
 	}
 	b.WriteString(headerPrefix)
-	b.WriteString(" {\n")
-	formatBlockItems(b, body, d+1)
-	b.WriteString(strings.Repeat("  ", d))
-	b.WriteString("}\n")
+	b.WriteByte(' ')
+	writeBlock(b, body, d)
+	b.WriteByte('\n')
 }
 
-func formatInlineValue(n node) string {
+func writeBlock(b *bytes.Buffer, blk *block, d int) {
+	if len(blk.entries) == 0 && len(blk.trailing) == 0 {
+		b.WriteString("{}")
+		return
+	}
+	b.WriteString("{\n")
+	formatBlockItems(b, blk, d+1)
+	b.WriteString(strings.Repeat("  ", d))
+	b.WriteString("}")
+}
+
+func writeInlineValue(b *bytes.Buffer, n node) {
 	switch vn := n.(type) {
 	case *scalarNode:
-		return formatScalarValue(vn.val)
+		b.WriteString(formatScalarValue(vn.val))
 	case *rawNode:
-		return quoteString(strings.Join(vn.lines, "\n"))
+		b.WriteString(quoteString(strings.Join(vn.lines, "\n")))
 	case *listNode:
-		if len(vn.elems) == 0 {
-			return "[]"
+		writeList(b, len(vn.elems), func(i int) Value { return vn.elems[i].val })
+	}
+}
+
+func writeList(b *bytes.Buffer, n int, at func(int) Value) {
+	b.WriteByte('[')
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteString(", ")
 		}
-		var b strings.Builder
-		b.WriteByte('[')
-		for i, elem := range vn.elems {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(formatScalarValue(elem.val))
+		b.WriteString(formatScalarValue(at(i)))
+	}
+	b.WriteByte(']')
+}
+
+func writeRawLines(b *bytes.Buffer, s, indent string) {
+	for i, line := range strings.Split(s, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
 		}
-		b.WriteByte(']')
-		return b.String()
-	default:
-		return ""
+		b.WriteString(indent)
+		b.WriteString(`\\`)
+		b.WriteString(line)
 	}
 }
 
 func isOneLineBlock(b *block) bool {
-	if b == nil || !b.oneLine || len(b.trailing) > 0 || len(b.entries) == 0 {
+	if !b.oneLine || len(b.trailing) > 0 || len(b.entries) == 0 {
 		return false
 	}
 	for _, e := range b.entries {
-		if e.kind != entryAssign || len(e.comments) > 0 {
-			return false
-		}
-		if !isOneLineValue(e.value) {
+		if e.kind != entryAssign || len(e.comments) > 0 || !isOneLineValue(e.value) {
 			return false
 		}
 	}
@@ -391,8 +245,6 @@ func isOneLineValue(n node) bool {
 			return !isRawCandidate(string(s))
 		}
 		return true
-	case *rawNode:
-		return !isRawCandidate(strings.Join(vn.lines, "\n"))
 	case *listNode:
 		return vn.oneLine
 	default:
@@ -400,34 +252,26 @@ func isOneLineValue(n node) bool {
 	}
 }
 
-func getRawCandidateString(n node) (string, bool) {
+func nodeString(n node) (string, bool) {
 	switch vn := n.(type) {
 	case *scalarNode:
 		if s, ok := vn.val.(String); ok {
-			str := string(s)
-			if isRawCandidate(str) {
-				return str, true
-			}
+			return string(s), true
 		}
 	case *rawNode:
-		str := strings.Join(vn.lines, "\n")
-		if isRawCandidate(str) {
-			return str, true
-		}
+		return strings.Join(vn.lines, "\n"), true
 	}
 	return "", false
 }
 
 func isRawCandidate(s string) bool {
 	hasLF := false
-	for i := 0; i < len(s); {
-		r, sz := utf8.DecodeRuneInString(s[i:])
+	for _, r := range s {
 		if r == '\n' {
 			hasLF = true
-		} else if (r < 0x20 && r != '\t') || r == 0x7f {
+		} else if isControlChar(r) {
 			return false
 		}
-		i += sz
 	}
 	return hasLF
 }
@@ -464,10 +308,7 @@ func formatKey(k string) string {
 }
 
 func isBareKey(k string) bool {
-	if k == "" || k == "true" || k == "false" {
-		return false
-	}
-	if !lexIsNameStart(k[0]) {
+	if k == "" || k == "true" || k == "false" || !lexIsNameStart(k[0]) {
 		return false
 	}
 	for i := 1; i < len(k); i++ {
@@ -509,13 +350,7 @@ func quoteString(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 2)
 	b.WriteByte('"')
-	for i := 0; i < len(s); {
-		r, sz := utf8.DecodeRuneInString(s[i:])
-		if r == utf8.RuneError && sz == 1 {
-			b.WriteByte(s[i])
-			i++
-			continue
-		}
+	for _, r := range s {
 		switch r {
 		case '"':
 			b.WriteString(`\"`)
@@ -525,10 +360,8 @@ func quoteString(s string) string {
 			b.WriteString(`\n`)
 		case '\r':
 			b.WriteString(`\r`)
-		case '\t':
-			b.WriteByte('\t')
 		default:
-			if (r < 0x20) || r == 0x7f {
+			if isControlChar(r) {
 				b.WriteString(`\u{`)
 				b.WriteString(strconv.FormatInt(int64(r), 16))
 				b.WriteByte('}')
@@ -536,7 +369,6 @@ func quoteString(s string) string {
 				b.WriteRune(r)
 			}
 		}
-		i += sz
 	}
 	b.WriteByte('"')
 	return b.String()

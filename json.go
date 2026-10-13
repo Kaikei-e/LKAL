@@ -2,8 +2,10 @@ package lkal
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
+	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -14,187 +16,123 @@ func ToJSON(f *File, plain bool) ([]byte, error) {
 		return nil, errors.New("lkal: nil File")
 	}
 	var buf bytes.Buffer
-	fields := f.Data().Fields
-	if plain {
-		if len(fields) == 0 {
-			return []byte("{}\n"), nil
-		}
-		buf.WriteString("{\n")
-		for i, field := range fields {
-			buf.WriteString("  ")
-			buf.WriteString(escapeJSONString(field.Key))
-			buf.WriteString(": ")
-			formatValue(&buf, field.Value, 1, true)
-			if i < len(fields)-1 {
-				buf.WriteString(",")
-			}
-			buf.WriteByte('\n')
-		}
-		buf.WriteString("}\n")
-		return buf.Bytes(), nil
+	enc := jsontext.NewEncoder(&buf, jsontext.WithIndent("  "))
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return nil, err
 	}
-
-	buf.WriteString("{\n  \"$lkal\": ")
-	buf.WriteString(escapeJSONString(f.Version()))
-	for _, field := range fields {
-		buf.WriteString(",\n  ")
-		buf.WriteString(escapeJSONString(field.Key))
-		buf.WriteString(": ")
-		formatValue(&buf, field.Value, 1, false)
+	if !plain {
+		if err := enc.WriteToken(jsontext.String("$lkal")); err != nil {
+			return nil, err
+		}
+		if err := enc.WriteToken(jsontext.String(f.Version())); err != nil {
+			return nil, err
+		}
 	}
-	buf.WriteString("\n}\n")
+	for _, field := range f.Data().Fields {
+		if err := enc.WriteToken(jsontext.String(field.Key)); err != nil {
+			return nil, err
+		}
+		if err := writeJSONValue(enc, field.Value, plain); err != nil {
+			return nil, err
+		}
+	}
+	if err := enc.WriteToken(jsontext.EndObject); err != nil {
+		return nil, err
+	}
 	return buf.Bytes(), nil
 }
 
-func escapeJSONString(s string) string {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(s)
-	b := buf.Bytes()
-	if len(b) > 0 && b[len(b)-1] == '\n' {
-		b = b[:len(b)-1]
-	}
-	return string(b)
-}
-
-func writeIndent(buf *bytes.Buffer, depth int) {
-	for i := 0; i < depth; i++ {
-		buf.WriteString("  ")
-	}
-}
-
-func formatValue(buf *bytes.Buffer, v Value, depth int, plain bool) {
+func writeJSONValue(enc *jsontext.Encoder, v Value, plain bool) error {
 	switch val := v.(type) {
 	case String:
-		buf.WriteString(escapeJSONString(string(val)))
+		return enc.WriteToken(jsontext.String(string(val)))
 	case Int:
-		buf.WriteString(strconv.FormatInt(int64(val), 10))
+		return enc.WriteToken(jsontext.Int(int64(val)))
 	case Decimal:
-		buf.WriteString(string(val))
+		return enc.WriteValue(jsontext.Value(val))
 	case Bool:
-		if val {
-			buf.WriteString("true")
-		} else {
-			buf.WriteString("false")
-		}
+		return enc.WriteToken(jsontext.Bool(bool(val)))
 	case Enum:
 		if plain {
-			buf.WriteString(escapeJSONString(string(val)))
-		} else {
-			buf.WriteString("{\n")
-			writeIndent(buf, depth+1)
-			buf.WriteString("\"$enum\": ")
-			buf.WriteString(escapeJSONString(string(val)))
-			buf.WriteByte('\n')
-			writeIndent(buf, depth)
-			buf.WriteString("}")
+			return enc.WriteToken(jsontext.String(string(val)))
 		}
+		return writeTag(enc, "$enum", string(val))
 	case Quantity:
 		payload := val.Number + val.Unit
 		if plain {
-			buf.WriteString(escapeJSONString(payload))
-		} else {
-			buf.WriteString("{\n")
-			writeIndent(buf, depth+1)
-			buf.WriteString("\"$qty\": ")
-			buf.WriteString(escapeJSONString(payload))
-			buf.WriteByte('\n')
-			writeIndent(buf, depth)
-			buf.WriteString("}")
+			return enc.WriteToken(jsontext.String(payload))
 		}
+		return writeTag(enc, "$qty", payload)
 	case Ref:
 		payload := refBody(val)
 		if plain {
-			buf.WriteString(escapeJSONString(payload))
-		} else {
-			buf.WriteString("{\n")
-			writeIndent(buf, depth+1)
-			buf.WriteString("\"$ref\": ")
-			buf.WriteString(escapeJSONString(payload))
-			buf.WriteByte('\n')
-			writeIndent(buf, depth)
-			buf.WriteString("}")
+			return enc.WriteToken(jsontext.String(payload))
 		}
+		return writeTag(enc, "$ref", payload)
 	case List:
-		if len(val) == 0 {
-			buf.WriteString("[]")
-			return
+		if err := enc.WriteToken(jsontext.BeginArray); err != nil {
+			return err
 		}
-		buf.WriteString("[\n")
-		for i, el := range val {
-			writeIndent(buf, depth+1)
-			formatValue(buf, el, depth+1, plain)
-			if i < len(val)-1 {
-				buf.WriteString(",")
+		for _, el := range val {
+			if err := writeJSONValue(enc, el, plain); err != nil {
+				return err
 			}
-			buf.WriteByte('\n')
 		}
-		writeIndent(buf, depth)
-		buf.WriteString("]")
+		return enc.WriteToken(jsontext.EndArray)
 	case Record:
-		if len(val.Fields) == 0 {
-			buf.WriteString("{}")
-			return
+		if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+			return err
 		}
-		buf.WriteString("{\n")
-		for i, f := range val.Fields {
-			writeIndent(buf, depth+1)
-			buf.WriteString(escapeJSONString(f.Key))
-			buf.WriteString(": ")
-			formatValue(buf, f.Value, depth+1, plain)
-			if i < len(val.Fields)-1 {
-				buf.WriteString(",")
+		for _, f := range val.Fields {
+			if err := enc.WriteToken(jsontext.String(f.Key)); err != nil {
+				return err
 			}
-			buf.WriteByte('\n')
+			if err := writeJSONValue(enc, f.Value, plain); err != nil {
+				return err
+			}
 		}
-		writeIndent(buf, depth)
-		buf.WriteString("}")
+		return enc.WriteToken(jsontext.EndObject)
 	case Collection:
-		if plain {
-			if len(val.Elems) == 0 {
-				buf.WriteString("{}")
-				return
+		if !plain {
+			if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+				return err
 			}
-			buf.WriteString("{\n")
-			for i, el := range val.Elems {
-				writeIndent(buf, depth+1)
-				buf.WriteString(escapeJSONString(el.Label))
-				buf.WriteString(": ")
-				formatValue(buf, el.Body, depth+1, plain)
-				if i < len(val.Elems)-1 {
-					buf.WriteString(",")
-				}
-				buf.WriteByte('\n')
+			if err := enc.WriteToken(jsontext.String("$coll")); err != nil {
+				return err
 			}
-			writeIndent(buf, depth)
-			buf.WriteString("}")
-		} else {
-			buf.WriteString("{\n")
-			writeIndent(buf, depth+1)
-			buf.WriteString("\"$coll\": ")
-			if len(val.Elems) == 0 {
-				buf.WriteString("{}")
-			} else {
-				buf.WriteString("{\n")
-				for i, el := range val.Elems {
-					writeIndent(buf, depth+2)
-					buf.WriteString(escapeJSONString(el.Label))
-					buf.WriteString(": ")
-					formatValue(buf, el.Body, depth+2, plain)
-					if i < len(val.Elems)-1 {
-						buf.WriteString(",")
-					}
-					buf.WriteByte('\n')
-				}
-				writeIndent(buf, depth+1)
-				buf.WriteString("}")
+		}
+		if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+			return err
+		}
+		for _, el := range val.Elems {
+			if err := enc.WriteToken(jsontext.String(el.Label)); err != nil {
+				return err
 			}
-			buf.WriteByte('\n')
-			writeIndent(buf, depth)
-			buf.WriteString("}")
+			if err := writeJSONValue(enc, el.Body, plain); err != nil {
+				return err
+			}
+		}
+		if err := enc.WriteToken(jsontext.EndObject); err != nil {
+			return err
+		}
+		if !plain {
+			return enc.WriteToken(jsontext.EndObject)
 		}
 	}
+	return nil
+}
+
+func writeTag(enc *jsontext.Encoder, tag, payload string) error {
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return err
+	}
+	if err := enc.WriteToken(jsontext.String(tag)); err != nil {
+		return err
+	}
+	if err := enc.WriteToken(jsontext.String(payload)); err != nil {
+		return err
+	}
+	return enc.WriteToken(jsontext.EndObject)
 }
 
 func nodeFromValue(v Value) node {
@@ -241,698 +179,6 @@ func blockFromRecord(r Record) *block {
 	}
 }
 
-func FromJSON(src []byte) (*File, error) {
-	if bytes.HasPrefix(src, []byte("\xef\xbb\xbf")) {
-		return nil, &ErrorList{Errors: []*Error{newError("", Pos{Line: 1, Col: 1}, "L301", "")}}
-	}
-
-	p := &jsonParser{src: src}
-	if !p.skipWhitespace() {
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-
-	if p.src[p.cursor] != '{' {
-		p.recordError(p.cursor, "L105", `start the top-level object with "$lkal": "0.1"`)
-		p.skipValue()
-		p.skipWhitespace()
-		if p.cursor < len(p.src) {
-			p.syntaxError(p.cursor)
-		}
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-
-	p.cursor++
-	if !p.skipWhitespace() {
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-	if p.src[p.cursor] == '}' {
-		p.recordError(p.cursor, "L105", `start the top-level object with "$lkal": "0.1"`)
-		p.cursor++
-		p.skipWhitespace()
-		if p.cursor < len(p.src) {
-			p.syntaxError(p.cursor)
-		}
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-
-	if p.src[p.cursor] != '"' {
-		p.syntaxError(p.cursor)
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-
-	firstKey, firstKeyOff, ok := p.parseString()
-	if !ok {
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-	if !p.skipWhitespace() {
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-	if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-		p.syntaxError(p.cursor)
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-	p.cursor++
-
-	seenKeys := make(map[string]bool)
-	seenTopLkal := false
-	var topFields []Field
-
-	if firstKey == "$lkal" {
-		seenTopLkal = true
-		if !p.skipWhitespace() {
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if p.src[p.cursor] != '"' {
-			valOff := p.cursor
-			p.skipValue()
-			p.recordError(valOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-		} else {
-			verStr, verOff, ok := p.parseString()
-			if !ok {
-				return nil, &ErrorList{Errors: sortErrors(p.errors)}
-			}
-			if verStr != "0.1" {
-				p.recordError(verOff, "L207", "")
-			}
-		}
-	} else {
-		p.recordError(firstKeyOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-		hasKeyError := false
-		if strings.HasPrefix(firstKey, "$") {
-			hasKeyError = true
-		}
-		seenKeys[firstKey] = true
-		if hasKeyError {
-			p.skipValue()
-		} else {
-			val, ok := p.parseValue(false)
-			if ok {
-				topFields = append(topFields, Field{Key: firstKey, Value: val})
-			}
-		}
-	}
-
-	for {
-		if !p.skipWhitespace() {
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if p.src[p.cursor] == '}' {
-			p.cursor++
-			break
-		}
-		if p.src[p.cursor] != ',' {
-			p.syntaxError(p.cursor)
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		p.cursor++
-		if !p.skipWhitespace() {
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if p.src[p.cursor] == '}' {
-			p.syntaxError(p.cursor)
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if p.src[p.cursor] != '"' {
-			p.syntaxError(p.cursor)
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		k, kOff, ok := p.parseString()
-		if !ok {
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if !p.skipWhitespace() {
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-			p.syntaxError(p.cursor)
-			return nil, &ErrorList{Errors: sortErrors(p.errors)}
-		}
-		p.cursor++
-
-		hasKeyError := false
-		if k == "$lkal" && seenTopLkal {
-			hasKeyError = true
-			p.recordError(kOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-		} else if strings.HasPrefix(k, "$") {
-			hasKeyError = true
-			p.recordError(kOff, "L205", "")
-		} else if seenKeys[k] {
-			hasKeyError = true
-			p.recordError(kOff, "L201", "")
-		}
-		seenKeys[k] = true
-
-		if hasKeyError {
-			p.skipValue()
-		} else {
-			val, ok := p.parseValue(false)
-			if ok {
-				topFields = append(topFields, Field{Key: k, Value: val})
-			}
-		}
-	}
-
-	p.skipWhitespace()
-	if p.cursor < len(p.src) {
-		p.syntaxError(p.cursor)
-	}
-
-	if len(p.errors) > 0 {
-		return nil, &ErrorList{Errors: sortErrors(p.errors)}
-	}
-
-	return &File{version: "0.1", body: blockFromRecord(Record{Fields: topFields})}, nil
-}
-
-type jsonParser struct {
-	src    []byte
-	cursor int
-	errors []*Error
-	failed bool
-}
-
-func (p *jsonParser) syntaxError(off int) {
-	if !p.failed {
-		p.failed = true
-		pos := posAt(p.src, off)
-		p.errors = append(p.errors, newError("", pos, "L301", ""))
-	}
-}
-
-func (p *jsonParser) recordError(off int, code, hint string) {
-	if !p.failed {
-		pos := posAt(p.src, off)
-		p.errors = append(p.errors, newError("", pos, code, hint))
-	}
-}
-
-func posAt(src []byte, off int) Pos {
-	if off > len(src) {
-		off = len(src)
-	}
-	line := 1
-	col := 1
-	for i := 0; i < off; {
-		if src[i] == '\n' {
-			line++
-			col = 1
-			i++
-			continue
-		}
-		if src[i] == '\r' && i+1 < len(src) && src[i+1] == '\n' {
-			i++
-			continue
-		}
-		_, sz := utf8.DecodeRune(src[i:])
-		col++
-		i += sz
-	}
-	return Pos{Line: line, Col: col}
-}
-
-func (p *jsonParser) skipWhitespace() bool {
-	for p.cursor < len(p.src) {
-		b := p.src[p.cursor]
-		if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
-			p.cursor++
-			continue
-		}
-		r, sz := utf8.DecodeRune(p.src[p.cursor:])
-		if r == utf8.RuneError && sz == 1 {
-			p.syntaxError(p.cursor)
-			return false
-		}
-		return true
-	}
-	return true
-}
-
-func parseHex4(b []byte) (rune, bool) {
-	var val rune
-	for _, c := range b {
-		var d rune
-		switch {
-		case c >= '0' && c <= '9':
-			d = rune(c - '0')
-		case c >= 'a' && c <= 'f':
-			d = rune(c - 'a' + 10)
-		case c >= 'A' && c <= 'F':
-			d = rune(c - 'A' + 10)
-		default:
-			return 0, false
-		}
-		val = (val << 4) | d
-	}
-	return val, true
-}
-
-func (p *jsonParser) parseString() (string, int, bool) {
-	if !p.skipWhitespace() {
-		return "", 0, false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return "", 0, false
-	}
-	startOff := p.cursor
-	if p.src[p.cursor] != '"' {
-		p.syntaxError(p.cursor)
-		return "", 0, false
-	}
-	p.cursor++
-
-	var decoded strings.Builder
-	for {
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return "", 0, false
-		}
-		b := p.src[p.cursor]
-		if b == '"' {
-			p.cursor++
-			return decoded.String(), startOff, true
-		}
-		if b == '\\' {
-			bsOff := p.cursor
-			p.cursor++
-			if p.cursor >= len(p.src) {
-				p.syntaxError(len(p.src))
-				return "", 0, false
-			}
-			esc := p.src[p.cursor]
-			p.cursor++
-			switch esc {
-			case '"':
-				decoded.WriteByte('"')
-			case '\\':
-				decoded.WriteByte('\\')
-			case '/':
-				decoded.WriteByte('/')
-			case 'b':
-				decoded.WriteByte('\b')
-			case 'f':
-				decoded.WriteByte('\f')
-			case 'n':
-				decoded.WriteByte('\n')
-			case 'r':
-				decoded.WriteByte('\r')
-			case 't':
-				decoded.WriteByte('\t')
-			case 'u':
-				if p.cursor+4 > len(p.src) {
-					p.syntaxError(len(p.src))
-					return "", 0, false
-				}
-				hex4 := p.src[p.cursor : p.cursor+4]
-				val, ok := parseHex4(hex4)
-				if !ok {
-					for k := 0; k < 4; k++ {
-						if !isHexDigit(hex4[k]) {
-							p.syntaxError(p.cursor + k)
-							return "", 0, false
-						}
-					}
-					p.syntaxError(p.cursor)
-					return "", 0, false
-				}
-				p.cursor += 4
-				if val >= 0xD800 && val <= 0xDBFF {
-					if p.cursor+6 <= len(p.src) && p.src[p.cursor] == '\\' && p.src[p.cursor+1] == 'u' {
-						lowHex4 := p.src[p.cursor+2 : p.cursor+6]
-						lowVal, lowOk := parseHex4(lowHex4)
-						if lowOk && lowVal >= 0xDC00 && lowVal <= 0xDFFF {
-							p.cursor += 6
-							combined := 0x10000 + ((val - 0xD800) << 10) | (lowVal - 0xDC00)
-							decoded.WriteRune(rune(combined))
-							continue
-						}
-					}
-					p.syntaxError(bsOff)
-					return "", 0, false
-				} else if val >= 0xDC00 && val <= 0xDFFF {
-					p.syntaxError(bsOff)
-					return "", 0, false
-				} else {
-					decoded.WriteRune(rune(val))
-				}
-			default:
-				p.syntaxError(p.cursor - 1)
-				return "", 0, false
-			}
-			continue
-		}
-		if b < 0x20 {
-			p.syntaxError(p.cursor)
-			return "", 0, false
-		}
-		r, sz := utf8.DecodeRune(p.src[p.cursor:])
-		if r == utf8.RuneError && sz == 1 {
-			p.syntaxError(p.cursor)
-			return "", 0, false
-		}
-		decoded.WriteRune(r)
-		p.cursor += sz
-	}
-}
-
-func (p *jsonParser) parseNumber() (string, int, bool) {
-	if !p.skipWhitespace() {
-		return "", 0, false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return "", 0, false
-	}
-	startOff := p.cursor
-
-	if p.src[p.cursor] == '-' {
-		p.cursor++
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return "", 0, false
-		}
-		if p.src[p.cursor] < '0' || p.src[p.cursor] > '9' {
-			p.syntaxError(p.cursor)
-			return "", 0, false
-		}
-	}
-
-	if p.src[p.cursor] == '0' {
-		p.cursor++
-		if p.cursor < len(p.src) && p.src[p.cursor] >= '0' && p.src[p.cursor] <= '9' {
-			p.syntaxError(p.cursor)
-			return "", 0, false
-		}
-	} else if p.src[p.cursor] >= '1' && p.src[p.cursor] <= '9' {
-		p.cursor++
-		for p.cursor < len(p.src) && p.src[p.cursor] >= '0' && p.src[p.cursor] <= '9' {
-			p.cursor++
-		}
-	} else {
-		p.syntaxError(p.cursor)
-		return "", 0, false
-	}
-
-	if p.cursor < len(p.src) && p.src[p.cursor] == '.' {
-		p.cursor++
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return "", 0, false
-		}
-		if p.src[p.cursor] < '0' || p.src[p.cursor] > '9' {
-			p.syntaxError(p.cursor)
-			return "", 0, false
-		}
-		for p.cursor < len(p.src) && p.src[p.cursor] >= '0' && p.src[p.cursor] <= '9' {
-			p.cursor++
-		}
-	}
-
-	if p.cursor < len(p.src) && (p.src[p.cursor] == 'e' || p.src[p.cursor] == 'E') {
-		p.cursor++
-		if p.cursor < len(p.src) && (p.src[p.cursor] == '+' || p.src[p.cursor] == '-') {
-			p.cursor++
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return "", 0, false
-		}
-		if p.src[p.cursor] < '0' || p.src[p.cursor] > '9' {
-			p.syntaxError(p.cursor)
-			return "", 0, false
-		}
-		for p.cursor < len(p.src) && p.src[p.cursor] >= '0' && p.src[p.cursor] <= '9' {
-			p.cursor++
-		}
-	}
-
-	if p.cursor < len(p.src) {
-		b := p.src[p.cursor]
-		if !(b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == ',' || b == ']' || b == '}') {
-			p.syntaxError(p.cursor)
-			return "", 0, false
-		}
-	}
-
-	return string(p.src[startOff:p.cursor]), startOff, true
-}
-
-func (p *jsonParser) parseLiteral() (string, int, bool) {
-	if !p.skipWhitespace() {
-		return "", 0, false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return "", 0, false
-	}
-	startOff := p.cursor
-
-	var lit string
-	switch {
-	case bytes.HasPrefix(p.src[p.cursor:], []byte("true")):
-		lit = "true"
-	case bytes.HasPrefix(p.src[p.cursor:], []byte("false")):
-		lit = "false"
-	case bytes.HasPrefix(p.src[p.cursor:], []byte("null")):
-		lit = "null"
-	default:
-		p.syntaxError(p.cursor)
-		return "", 0, false
-	}
-
-	nextOff := p.cursor + len(lit)
-	if nextOff < len(p.src) {
-		b := p.src[nextOff]
-		if !(b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == ',' || b == ']' || b == '}') {
-			p.syntaxError(nextOff)
-			return "", 0, false
-		}
-	}
-	p.cursor = nextOff
-	return lit, startOff, true
-}
-
-func (p *jsonParser) skipValue() bool {
-	if !p.skipWhitespace() {
-		return false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return false
-	}
-	b := p.src[p.cursor]
-	switch b {
-	case '"':
-		_, _, ok := p.parseString()
-		return ok
-	case '{':
-		return p.skipObject()
-	case '[':
-		return p.skipArray()
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		_, _, ok := p.parseNumber()
-		return ok
-	case 't', 'f', 'n':
-		_, _, ok := p.parseLiteral()
-		return ok
-	default:
-		p.syntaxError(p.cursor)
-		return false
-	}
-}
-
-func (p *jsonParser) skipMembersAfterColon() bool {
-	if !p.skipValue() {
-		return false
-	}
-	for {
-		if !p.skipWhitespace() {
-			return false
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return false
-		}
-		if p.src[p.cursor] == '}' {
-			p.cursor++
-			return true
-		}
-		if p.src[p.cursor] != ',' {
-			p.syntaxError(p.cursor)
-			return false
-		}
-		p.cursor++
-		if !p.skipWhitespace() {
-			return false
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return false
-		}
-		if p.src[p.cursor] == '}' {
-			p.syntaxError(p.cursor)
-			return false
-		}
-		_, _, ok := p.parseString()
-		if !ok {
-			return false
-		}
-		if !p.skipWhitespace() {
-			return false
-		}
-		if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-			p.syntaxError(p.cursor)
-			return false
-		}
-		p.cursor++
-		if !p.skipValue() {
-			return false
-		}
-	}
-}
-
-func (p *jsonParser) skipObject() bool {
-	p.cursor++ // skip '{'
-	if !p.skipWhitespace() {
-		return false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return false
-	}
-	if p.src[p.cursor] == '}' {
-		p.cursor++
-		return true
-	}
-	_, _, ok := p.parseString()
-	if !ok {
-		return false
-	}
-	if !p.skipWhitespace() {
-		return false
-	}
-	if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-		p.syntaxError(p.cursor)
-		return false
-	}
-	p.cursor++
-	return p.skipMembersAfterColon()
-}
-
-func (p *jsonParser) skipArray() bool {
-	p.cursor++ // skip '['
-	if !p.skipWhitespace() {
-		return false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return false
-	}
-	if p.src[p.cursor] == ']' {
-		p.cursor++
-		return true
-	}
-	for {
-		if !p.skipValue() {
-			return false
-		}
-		if !p.skipWhitespace() {
-			return false
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return false
-		}
-		if p.src[p.cursor] == ']' {
-			p.cursor++
-			return true
-		}
-		if p.src[p.cursor] != ',' {
-			p.syntaxError(p.cursor)
-			return false
-		}
-		p.cursor++
-		if !p.skipWhitespace() {
-			return false
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return false
-		}
-		if p.src[p.cursor] == ']' {
-			p.syntaxError(p.cursor)
-			return false
-		}
-	}
-}
-
-func (p *jsonParser) hasSecondMemberAndSkip(tagHadError bool) bool {
-	if !p.skipWhitespace() {
-		return false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return false
-	}
-	if p.src[p.cursor] == '}' {
-		p.cursor++
-		return false
-	}
-	if p.src[p.cursor] != ',' {
-		p.syntaxError(p.cursor)
-		return false
-	}
-	p.cursor++
-	if !p.skipWhitespace() {
-		return false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return false
-	}
-	if p.src[p.cursor] == '}' {
-		p.syntaxError(p.cursor)
-		return false
-	}
-	_, kOff, ok := p.parseString()
-	if !ok {
-		return false
-	}
-	if !p.skipWhitespace() {
-		return false
-	}
-	if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-		p.syntaxError(p.cursor)
-		return false
-	}
-	p.cursor++
-	if !tagHadError {
-		p.recordError(kOff, "L305", "write a tag object with only one key")
-	}
-	p.skipMembersAfterColon()
-	return true
-}
-
 func scalarType(v Value) string {
 	switch v.(type) {
 	case String:
@@ -955,10 +201,7 @@ func scalarType(v Value) string {
 }
 
 func isValidEnumName(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	if !lexIsNameStart(s[0]) {
+	if len(s) == 0 || !lexIsNameStart(s[0]) {
 		return false
 	}
 	for i := 1; i < len(s); i++ {
@@ -969,92 +212,386 @@ func isValidEnumName(s string) bool {
 	return true
 }
 
-func (p *jsonParser) parseValue(skipErrors bool) (Value, bool) {
-	if !p.skipWhitespace() {
+func parseRefBody(s string) (Ref, bool) {
+	res := lexScanRef([]byte("&"+s), 0)
+	if res.kind == tokRef && res.length == len(s)+1 && len(res.segs) > 0 {
+		return Ref(res.segs), true
+	}
+	return nil, false
+}
+
+type rawError struct {
+	offset int
+	code   string
+	hint   string
+}
+
+type jsonDecoder struct {
+	src       []byte
+	dec       *jsontext.Decoder
+	errors    []rawError
+	syntaxErr bool
+}
+
+func (p *jsonDecoder) recordError(offset int, code, hint string) {
+	p.errors = append(p.errors, rawError{offset: offset, code: code, hint: hint})
+}
+
+func (p *jsonDecoder) nextTokenStart() int {
+	off := int(p.dec.InputOffset())
+	for off < len(p.src) {
+		b := p.src[off]
+		if b == ' ' || b == '\t' || b == '\r' || b == '\n' || b == ',' || b == ':' {
+			off++
+			continue
+		}
+		break
+	}
+	return off
+}
+
+func tagHint(tag string) string {
+	switch tag {
+	case "$enum":
+		return `write the enum name as a string, for example {"$enum": "tcp"}`
+	case "$qty":
+		return `write the quantity as a string, for example {"$qty": "512Mi"}`
+	case "$ref":
+		return `write the reference as a string, for example {"$ref": "secret/db-creds"}`
+	default:
+		return `write {"$coll": {"label": {...}}} with at least one element`
+	}
+}
+
+func (p *jsonDecoder) handleSyntaxError(err error) {
+	if p.syntaxErr {
+		return
+	}
+	p.syntaxErr = true
+	var synErr *jsontext.SyntacticError
+	if errors.As(err, &synErr) {
+		hint := ""
+		if synErr.Err != nil && strings.Contains(synErr.Err.Error(), "depth") {
+			hint = "nest objects and arrays at most 10000 levels deep"
+		}
+		p.recordError(int(synErr.ByteOffset), "L301", hint)
+	} else if err == io.EOF || err == io.ErrUnexpectedEOF {
+		p.recordError(len(p.src), "L301", "")
+	}
+}
+
+func (p *jsonDecoder) readToken() (jsontext.Token, int, bool) {
+	if p.syntaxErr {
+		return jsontext.Token{}, 0, false
+	}
+	off := p.nextTokenStart()
+	tok, err := p.dec.ReadToken()
+	if err != nil {
+		p.handleSyntaxError(err)
+		return jsontext.Token{}, off, false
+	}
+	return tok, off, true
+}
+
+func (p *jsonDecoder) skipValue() bool {
+	if p.syntaxErr {
+		return false
+	}
+	if err := p.dec.SkipValue(); err != nil {
+		p.handleSyntaxError(err)
+		return false
+	}
+	return true
+}
+
+func (p *jsonDecoder) skipContainerRemainder(targetDepth int) {
+	for !p.syntaxErr && p.dec.StackDepth() >= targetDepth {
+		if _, _, ok := p.readToken(); !ok {
+			return
+		}
+	}
+}
+
+func (p *jsonDecoder) checkTrailing() {
+	if p.syntaxErr {
+		return
+	}
+	for off := int(p.dec.InputOffset()); off < len(p.src); off++ {
+		b := p.src[off]
+		if b != ' ' && b != '\t' && b != '\r' && b != '\n' {
+			p.handleSyntaxError(&jsontext.SyntacticError{ByteOffset: int64(off)})
+			break
+		}
+	}
+}
+
+func (p *jsonDecoder) buildErrorList() *ErrorList {
+	sort.SliceStable(p.errors, func(i, j int) bool {
+		if p.errors[i].offset != p.errors[j].offset {
+			return p.errors[i].offset < p.errors[j].offset
+		}
+		return p.errors[i].code < p.errors[j].code
+	})
+
+	n := len(p.errors)
+	if n > 20 {
+		n = 20
+	}
+	kept := p.errors[:n]
+
+	res := make([]*Error, len(kept))
+	cur := 0
+	curLine := 1
+	curCol := 1
+
+	for idx, rErr := range kept {
+		targetOff := rErr.offset
+		if targetOff > len(p.src) {
+			targetOff = len(p.src)
+		}
+		for cur < targetOff && cur < len(p.src) {
+			if p.src[cur] == '\n' {
+				curLine++
+				curCol = 1
+				cur++
+			} else {
+				_, sz := utf8.DecodeRune(p.src[cur:])
+				if cur+sz > targetOff {
+					sz = 1
+				}
+				curCol++
+				cur += sz
+			}
+		}
+		res[idx] = newError("", Pos{Line: curLine, Col: curCol}, rErr.code, rErr.hint)
+	}
+
+	return &ErrorList{Errors: res}
+}
+
+func FromJSON(src []byte) (*File, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(src), jsontext.AllowDuplicateNames(true))
+	p := &jsonDecoder{src: src, dec: dec}
+
+	if len(bytes.Trim(src, " \t\r\n")) == 0 {
+		p.recordError(len(src), "L301", "")
+		return nil, p.buildErrorList()
+	}
+
+	kind := dec.PeekKind()
+	if kind == jsontext.KindInvalid {
+		p.readToken()
+		return nil, p.buildErrorList()
+	}
+
+	topOff := p.nextTokenStart()
+	if kind != '{' {
+		if _, _, ok := p.readToken(); !ok {
+			return nil, p.buildErrorList()
+		}
+		p.recordError(topOff, "L105", `start the top-level object with "$lkal": "0.1"`)
+		if kind == '[' {
+			p.skipContainerRemainder(p.dec.StackDepth())
+		}
+		p.checkTrailing()
+		return nil, p.buildErrorList()
+	}
+
+	if _, _, ok := p.readToken(); !ok {
+		return nil, p.buildErrorList()
+	}
+
+	if dec.PeekKind() == '}' {
+		closeOff := p.nextTokenStart()
+		p.readToken()
+		p.recordError(closeOff, "L105", `start the top-level object with "$lkal": "0.1"`)
+		p.checkTrailing()
+		return nil, p.buildErrorList()
+	}
+
+	firstKeyTok, firstKeyOff, ok := p.readToken()
+	if !ok {
+		return nil, p.buildErrorList()
+	}
+	firstKey := firstKeyTok.String()
+
+	seenKeys := make(map[string]bool)
+	var topFields []Field
+
+	if firstKey == "$lkal" {
+		valOff := p.nextTokenStart()
+		switch dec.PeekKind() {
+		case 'n':
+			if _, _, ok := p.readToken(); ok {
+				p.recordError(valOff, "L105", `start the top-level object with "$lkal": "0.1"`)
+			}
+		case '"':
+			verTok, verOff, ok := p.readToken()
+			if !ok {
+				return nil, p.buildErrorList()
+			}
+			if verTok.String() != "0.1" {
+				p.recordError(verOff, "L207", "")
+			}
+		default:
+			p.recordError(valOff, "L105", `start the top-level object with "$lkal": "0.1"`)
+			if !p.skipValue() {
+				return nil, p.buildErrorList()
+			}
+		}
+	} else {
+		p.recordError(firstKeyOff, "L105", `start the top-level object with "$lkal": "0.1"`)
+		hasKeyError := false
+		if strings.HasPrefix(firstKey, "$") {
+			hasKeyError = true
+			p.recordError(firstKeyOff, "L205", "")
+		}
+		seenKeys[firstKey] = true
+		if hasKeyError {
+			if !p.skipValue() {
+				return nil, p.buildErrorList()
+			}
+		} else {
+			val, ok := p.parseValue()
+			if ok {
+				topFields = append(topFields, Field{Key: firstKey, Value: val})
+			}
+		}
+	}
+
+	if p.syntaxErr {
+		return nil, p.buildErrorList()
+	}
+
+	for !p.syntaxErr {
+		kind := dec.PeekKind()
+		if kind == jsontext.KindInvalid {
+			p.readToken()
+			return nil, p.buildErrorList()
+		}
+		if kind == '}' {
+			p.readToken()
+			break
+		}
+
+		kTok, kOff, ok := p.readToken()
+		if !ok {
+			return nil, p.buildErrorList()
+		}
+		k := kTok.String()
+
+		hasKeyError := false
+		if k == "$lkal" {
+			hasKeyError = true
+			p.recordError(kOff, "L105", `start the top-level object with "$lkal": "0.1"`)
+		} else if strings.HasPrefix(k, "$") {
+			hasKeyError = true
+			p.recordError(kOff, "L205", "")
+		} else if seenKeys[k] {
+			hasKeyError = true
+			p.recordError(kOff, "L201", "")
+		}
+		seenKeys[k] = true
+
+		if hasKeyError {
+			if !p.skipValue() {
+				return nil, p.buildErrorList()
+			}
+		} else {
+			val, ok := p.parseValue()
+			if ok {
+				topFields = append(topFields, Field{Key: k, Value: val})
+			}
+		}
+	}
+
+	if p.syntaxErr {
+		return nil, p.buildErrorList()
+	}
+
+	p.checkTrailing()
+
+	if len(p.errors) > 0 {
+		return nil, p.buildErrorList()
+	}
+
+	return &File{version: "0.1", body: blockFromRecord(Record{Fields: topFields})}, nil
+}
+
+func (p *jsonDecoder) parseValue() (Value, bool) {
+	if p.syntaxErr {
 		return nil, false
 	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
+	kind := p.dec.PeekKind()
+	if kind == jsontext.KindInvalid {
+		p.readToken()
 		return nil, false
 	}
-	b := p.src[p.cursor]
-	switch b {
-	case '"':
-		s, _, ok := p.parseString()
-		if !ok {
-			return nil, false
-		}
-		return String(s), true
-	case 't', 'f':
-		lit, _, ok := p.parseLiteral()
-		if !ok {
-			return nil, false
-		}
-		return Bool(lit == "true"), true
+
+	off := p.nextTokenStart()
+
+	switch kind {
 	case 'n':
-		lit, off, ok := p.parseLiteral()
-		if !ok {
-			return nil, false
-		}
-		if lit == "null" && !skipErrors {
+		if _, _, ok := p.readToken(); ok {
 			p.recordError(off, "L302", "")
 		}
 		return nil, false
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		numStr, off, ok := p.parseNumber()
+
+	case 't', 'f':
+		tok, _, ok := p.readToken()
 		if !ok {
 			return nil, false
 		}
-		if skipErrors {
-			return nil, true
+		return Bool(tok.Bool()), true
+
+	case '"':
+		tok, _, ok := p.readToken()
+		if !ok {
+			return nil, false
 		}
-		if strings.ContainsAny(numStr, "eE") {
+		return String(tok.String()), true
+
+	case '0':
+		tok, _, ok := p.readToken()
+		if !ok {
+			return nil, false
+		}
+		raw := tok.String()
+		if strings.ContainsAny(raw, "eE") {
 			p.recordError(off, "L303", "")
 			return nil, false
 		}
-		digitCount := 0
-		for i := 0; i < len(numStr); i++ {
-			if numStr[i] >= '0' && numStr[i] <= '9' {
-				digitCount++
-			}
-		}
-		if digitCount > 100 {
+		valKind, errCode := lexValidateNumber(raw)
+		if errCode == "L005" {
 			p.recordError(off, "L005", "")
 			return nil, false
 		}
-		if strings.Contains(numStr, ".") {
-			return Decimal(normalizeNumber(numStr)), true
+		if valKind == tokDecimal {
+			return Decimal(normalizeNumber(raw)), true
 		}
-		if numStr == "-0" {
-			return Int(0), true
-		}
-		n, err := strconv.ParseInt(numStr, 10, 64)
-		if err != nil {
-			p.recordError(off, "L005", "")
-			return nil, false
-		}
+		n, _ := strconv.ParseInt(raw, 10, 64)
 		return Int(n), true
+
 	case '[':
-		return p.parseArray(skipErrors)
+		p.readToken()
+		return p.parseArray()
+
 	case '{':
-		return p.parseObject(skipErrors)
+		p.readToken()
+		return p.parseObject()
+
 	default:
-		p.syntaxError(p.cursor)
+		p.readToken()
 		return nil, false
 	}
 }
 
-func (p *jsonParser) parseArray(skipErrors bool) (Value, bool) {
-	p.cursor++ // skip '['
-	if !p.skipWhitespace() {
+func (p *jsonDecoder) parseArray() (Value, bool) {
+	if p.syntaxErr {
 		return nil, false
 	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return nil, false
-	}
-	if p.src[p.cursor] == ']' {
-		p.cursor++
+	if p.dec.PeekKind() == ']' {
+		p.readToken()
 		return List{}, true
 	}
 
@@ -1062,59 +599,38 @@ func (p *jsonParser) parseArray(skipErrors bool) (Value, bool) {
 	var elemOffsets []int
 	hadElementError := false
 
-	for {
-		if !p.skipWhitespace() {
+	for !p.syntaxErr {
+		elemKind := p.dec.PeekKind()
+		if elemKind == jsontext.KindInvalid {
+			p.readToken()
 			return nil, false
 		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, false
-		}
-		elemStartOff := p.cursor
-		elemB := p.src[p.cursor]
+		elemOff := p.nextTokenStart()
 
-		if elemB == '[' {
-			if !skipErrors {
-				p.recordError(elemStartOff, "L304", "")
-			}
+		if elemKind == '[' {
+			p.recordError(elemOff, "L304", "")
 			hadElementError = true
-			if !p.skipArray() {
+			if !p.skipValue() {
 				return nil, false
 			}
-		} else if elemB == '{' {
-			braceOff := p.cursor
-			p.cursor++ // skip '{'
-			if !p.skipWhitespace() {
+		} else if elemKind == '{' {
+			braceOff := elemOff
+			if _, _, ok := p.readToken(); !ok {
 				return nil, false
 			}
-			if p.cursor >= len(p.src) {
-				p.syntaxError(len(p.src))
-				return nil, false
-			}
-			if p.src[p.cursor] == '}' {
-				p.cursor++
-				if !skipErrors {
-					p.recordError(braceOff, "L304", "")
-				}
+			recDepth := p.dec.StackDepth()
+			if p.dec.PeekKind() == '}' {
+				p.readToken()
+				p.recordError(braceOff, "L304", "")
 				hadElementError = true
-			} else if p.src[p.cursor] != '"' {
-				p.syntaxError(p.cursor)
-				return nil, false
 			} else {
-				firstKey, _, ok := p.parseString()
+				firstKeyTok, _, ok := p.readToken()
 				if !ok {
 					return nil, false
 				}
-				if !p.skipWhitespace() {
-					return nil, false
-				}
-				if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-					p.syntaxError(p.cursor)
-					return nil, false
-				}
-				p.cursor++
+				firstKey := firstKeyTok.String()
 				if firstKey == "$enum" || firstKey == "$qty" || firstKey == "$ref" {
-					tagVal, ok := p.parseScalarTag(firstKey, skipErrors)
+					tagVal, ok := p.parseScalarTag(firstKey)
 					if !ok {
 						hadElementError = true
 					} else {
@@ -1122,58 +638,44 @@ func (p *jsonParser) parseArray(skipErrors bool) (Value, bool) {
 						elemOffsets = append(elemOffsets, braceOff)
 					}
 				} else {
-					if !skipErrors {
-						p.recordError(braceOff, "L304", "")
-					}
+					p.recordError(braceOff, "L304", "")
 					hadElementError = true
-					if !p.skipMembersAfterColon() {
+					p.skipContainerRemainder(recDepth)
+					if p.syntaxErr {
 						return nil, false
 					}
 				}
 			}
 		} else {
-			val, ok := p.parseValue(skipErrors)
+			val, ok := p.parseValue()
 			if !ok {
 				hadElementError = true
 			} else {
 				elements = append(elements, val)
-				elemOffsets = append(elemOffsets, elemStartOff)
+				elemOffsets = append(elemOffsets, elemOff)
 			}
 		}
 
-		if !p.skipWhitespace() {
+		if p.syntaxErr {
 			return nil, false
 		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
+
+		nextKind := p.dec.PeekKind()
+		if nextKind == jsontext.KindInvalid {
+			p.readToken()
 			return nil, false
 		}
-		if p.src[p.cursor] == ']' {
-			p.cursor++
+		if nextKind == ']' {
+			p.readToken()
 			break
-		}
-		if p.src[p.cursor] != ',' {
-			p.syntaxError(p.cursor)
-			return nil, false
-		}
-		p.cursor++
-		if !p.skipWhitespace() {
-			return nil, false
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, false
-		}
-		if p.src[p.cursor] == ']' {
-			p.syntaxError(p.cursor)
-			return nil, false
 		}
 	}
 
-	if hadElementError {
+	if p.syntaxErr || hadElementError {
 		return nil, false
 	}
-	if !skipErrors && len(elements) > 1 {
+
+	if len(elements) > 1 {
 		firstType := scalarType(elements[0])
 		for i := 1; i < len(elements); i++ {
 			if scalarType(elements[i]) != firstType {
@@ -1182,112 +684,160 @@ func (p *jsonParser) parseArray(skipErrors bool) (Value, bool) {
 			}
 		}
 	}
+
 	return List(elements), true
 }
 
-func (p *jsonParser) parseScalarTag(tag string, skipErrors bool) (Value, bool) {
-	var val Value
-	var ok bool
-	switch tag {
-	case "$enum":
-		val, ok = p.parseEnumPayload(skipErrors)
-	case "$qty":
-		val, ok = p.parseQtyPayload(skipErrors)
-	case "$ref":
-		val, ok = p.parseRefPayload(skipErrors)
-	}
-	hasSecond := p.hasSecondMemberAndSkip(!ok || skipErrors)
-	if hasSecond || !ok {
+func (p *jsonDecoder) parseObject() (Value, bool) {
+	if p.syntaxErr {
 		return nil, false
 	}
-	return val, true
-}
-
-func (p *jsonParser) parseObject(skipErrors bool) (Value, bool) {
-	p.cursor++ // skip '{'
-	if !p.skipWhitespace() {
-		return nil, false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return nil, false
-	}
-	if p.src[p.cursor] == '}' {
-		p.cursor++
+	if p.dec.PeekKind() == '}' {
+		p.readToken()
 		return Record{}, true
 	}
-	if p.src[p.cursor] != '"' {
-		p.syntaxError(p.cursor)
-		return nil, false
-	}
-	firstKey, firstKeyOff, ok := p.parseString()
+
+	firstKeyTok, firstKeyOff, ok := p.readToken()
 	if !ok {
 		return nil, false
 	}
-	if !p.skipWhitespace() {
-		return nil, false
-	}
-	if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-		p.syntaxError(p.cursor)
-		return nil, false
-	}
-	p.cursor++
+	firstKey := firstKeyTok.String()
 
 	switch firstKey {
 	case "$enum", "$qty", "$ref":
-		return p.parseScalarTag(firstKey, skipErrors)
+		return p.parseScalarTag(firstKey)
 	case "$coll":
-		return p.parseCollTag(skipErrors)
+		return p.parseCollTag()
 	default:
-		return p.parseRecordMembers(firstKey, firstKeyOff, skipErrors)
+		return p.parseRecordMembers(firstKey, firstKeyOff)
 	}
 }
 
-func (p *jsonParser) parseCollTag(skipErrors bool) (Value, bool) {
-	if !p.skipWhitespace() {
+func (p *jsonDecoder) parseScalarTag(tag string) (Value, bool) {
+	if p.syntaxErr {
 		return nil, false
 	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
+	depth := p.dec.StackDepth()
+	payloadKind := p.dec.PeekKind()
+	if payloadKind == jsontext.KindInvalid {
+		p.readToken()
 		return nil, false
 	}
-	b := p.src[p.cursor]
-	if b == 'n' {
-		lit, nullOff, ok := p.parseLiteral()
-		if !ok {
-			return nil, false
+	payloadOff := p.nextTokenStart()
+
+	if payloadKind == 'n' {
+		if _, _, ok := p.readToken(); ok {
+			p.recordError(payloadOff, "L302", "")
 		}
-		if lit == "null" && !skipErrors {
-			p.recordError(nullOff, "L302", "")
-		}
-		p.hasSecondMemberAndSkip(true)
-		return nil, false
-	}
-	if b != '{' {
-		valOff := p.cursor
-		p.skipValue()
-		if !skipErrors {
-			p.recordError(valOff, "L305", `write {"$coll": {"label": {...}}} with at least one element`)
-		}
-		p.hasSecondMemberAndSkip(true)
+		p.skipContainerRemainder(depth)
 		return nil, false
 	}
 
-	collObjOff := p.cursor
-	p.cursor++ // skip '{'
-	if !p.skipWhitespace() {
-		return nil, false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return nil, false
-	}
-	if p.src[p.cursor] == '}' {
-		p.cursor++
-		if !skipErrors {
-			p.recordError(collObjOff, "L305", `write {"$coll": {"label": {...}}} with at least one element`)
+	var val Value
+	if payloadKind == '"' {
+		tok, _, ok := p.readToken()
+		if !ok {
+			return nil, false
 		}
-		p.hasSecondMemberAndSkip(true)
+		s := tok.String()
+		switch tag {
+		case "$enum":
+			if isValidEnumName(s) {
+				val = Enum(s)
+			} else {
+				p.recordError(payloadOff, "L305", tagHint(tag))
+			}
+		case "$qty":
+			if len(s) == 0 || (s[0] != '-' && (s[0] < '0' || s[0] > '9')) {
+				p.recordError(payloadOff, "L305", tagHint(tag))
+			} else {
+				kind, errCode := lexValidateNumber(s)
+				if kind == tokQuantity && errCode == "" {
+					num, unit := splitQuantity(s)
+					val = Quantity{Number: normalizeNumber(num), Unit: unit}
+				} else if errCode == "L005" {
+					p.recordError(payloadOff, "L005", "")
+				} else {
+					p.recordError(payloadOff, "L305", tagHint(tag))
+				}
+			}
+		case "$ref":
+			if ref, ok := parseRefBody(s); ok {
+				val = ref
+			} else {
+				p.recordError(payloadOff, "L305", tagHint(tag))
+			}
+		}
+	} else {
+		p.recordError(payloadOff, "L305", tagHint(tag))
+		p.skipContainerRemainder(depth)
+		return nil, false
+	}
+
+	if val == nil {
+		p.skipContainerRemainder(depth)
+		return nil, false
+	}
+
+	if p.syntaxErr {
+		return nil, false
+	}
+
+	nextKind := p.dec.PeekKind()
+	if nextKind == jsontext.KindInvalid {
+		p.readToken()
+		return nil, false
+	}
+	if nextKind == '}' {
+		p.readToken()
+		return val, true
+	}
+
+	_, kOff, ok := p.readToken()
+	if !ok {
+		return nil, false
+	}
+	p.recordError(kOff, "L305", "write a tag object with only one key")
+	p.skipContainerRemainder(depth)
+	return nil, false
+}
+
+func (p *jsonDecoder) parseCollTag() (Value, bool) {
+	if p.syntaxErr {
+		return nil, false
+	}
+	depth := p.dec.StackDepth()
+	payloadKind := p.dec.PeekKind()
+	if payloadKind == jsontext.KindInvalid {
+		p.readToken()
+		return nil, false
+	}
+	payloadOff := p.nextTokenStart()
+
+	if payloadKind == 'n' {
+		if _, _, ok := p.readToken(); ok {
+			p.recordError(payloadOff, "L302", "")
+		}
+		p.skipContainerRemainder(depth)
+		return nil, false
+	}
+
+	collHint := tagHint("$coll")
+	if payloadKind != '{' {
+		p.recordError(payloadOff, "L305", collHint)
+		p.skipContainerRemainder(depth)
+		return nil, false
+	}
+
+	collObjOff := payloadOff
+	if _, _, ok := p.readToken(); !ok {
+		return nil, false
+	}
+
+	if p.dec.PeekKind() == '}' {
+		p.readToken()
+		p.recordError(collObjOff, "L305", collHint)
+		p.skipContainerRemainder(depth)
 		return nil, false
 	}
 
@@ -1295,154 +845,126 @@ func (p *jsonParser) parseCollTag(skipErrors bool) (Value, bool) {
 	var elems []Elem
 	collHadError := false
 
-	for {
-		if !p.skipWhitespace() {
+	for !p.syntaxErr {
+		kind := p.dec.PeekKind()
+		if kind == jsontext.KindInvalid {
+			p.readToken()
 			return nil, false
 		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, false
+		if kind == '}' {
+			p.readToken()
+			break
 		}
-		if p.src[p.cursor] != '"' {
-			p.syntaxError(p.cursor)
-			return nil, false
-		}
-		label, labelOff, ok := p.parseString()
+
+		labelTok, labelOff, ok := p.readToken()
 		if !ok {
 			return nil, false
 		}
-		if !p.skipWhitespace() {
-			return nil, false
-		}
-		if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-			p.syntaxError(p.cursor)
-			return nil, false
-		}
-		p.cursor++
+		label := labelTok.String()
 
 		isDup := seenLabels[label]
-		if isDup && !collHadError && !skipErrors {
+		if isDup {
 			p.recordError(labelOff, "L201", "")
 			collHadError = true
+			if !p.skipValue() {
+				return nil, false
+			}
+			continue
 		}
 		seenLabels[label] = true
 
-		if !p.skipWhitespace() {
+		valKind := p.dec.PeekKind()
+		if valKind == jsontext.KindInvalid {
+			p.readToken()
 			return nil, false
 		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, false
+		valOff := p.nextTokenStart()
+
+		if valKind == 'n' {
+			if _, _, ok := p.readToken(); ok {
+				p.recordError(valOff, "L302", "")
+			}
+			collHadError = true
+			continue
 		}
-		valB := p.src[p.cursor]
-		if valB == 'n' {
-			lit, nullOff, ok := p.parseLiteral()
-			if !ok {
+
+		if valKind != '{' {
+			p.recordError(valOff, "L305", collHint)
+			collHadError = true
+			if !p.skipValue() {
 				return nil, false
 			}
-			if lit == "null" && !collHadError && !skipErrors {
-				p.recordError(nullOff, "L302", "")
-				collHadError = true
-			}
-		} else if valB != '{' {
-			valOff := p.cursor
-			p.skipValue()
-			if !collHadError && !skipErrors {
-				p.recordError(valOff, "L305", `write {"$coll": {"label": {...}}} with at least one element`)
-				collHadError = true
-			}
-		} else {
-			recBraceOff := p.cursor
-			elemRec, ok := p.parseCollElemRecord(recBraceOff, collHadError || skipErrors)
-			if !ok {
-				collHadError = true
-			} else if !isDup && !collHadError {
-				elems = append(elems, Elem{Label: label, Body: elemRec})
-			}
+			continue
 		}
 
-		if !p.skipWhitespace() {
+		recBraceOff := valOff
+		if _, _, ok := p.readToken(); !ok {
 			return nil, false
 		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
+		recDepth := p.dec.StackDepth()
+		if p.dec.PeekKind() == '}' {
+			p.readToken()
+			if !collHadError {
+				elems = append(elems, Elem{Label: label, Body: Record{}})
+			}
+			continue
+		}
+
+		firstKeyTok, firstKeyOff, ok := p.readToken()
+		if !ok {
 			return nil, false
 		}
-		if p.src[p.cursor] == '}' {
-			p.cursor++
-			break
+		firstKey := firstKeyTok.String()
+		if firstKey == "$enum" || firstKey == "$qty" || firstKey == "$ref" || firstKey == "$coll" {
+			p.recordError(recBraceOff, "L305", collHint)
+			collHadError = true
+			p.skipContainerRemainder(recDepth)
+			if p.syntaxErr {
+				return nil, false
+			}
+			continue
 		}
-		if p.src[p.cursor] != ',' {
-			p.syntaxError(p.cursor)
-			return nil, false
-		}
-		p.cursor++
-		if !p.skipWhitespace() {
-			return nil, false
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, false
-		}
-		if p.src[p.cursor] == '}' {
-			p.syntaxError(p.cursor)
-			return nil, false
+
+		recVal, ok := p.parseRecordMembers(firstKey, firstKeyOff)
+		if !ok {
+			collHadError = true
+		} else if !collHadError {
+			elems = append(elems, Elem{Label: label, Body: recVal})
 		}
 	}
 
-	hasSecond := p.hasSecondMemberAndSkip(collHadError || skipErrors)
-	if hasSecond || collHadError {
+	if p.syntaxErr {
 		return nil, false
 	}
-	return Collection{Elems: elems}, true
-}
 
-func (p *jsonParser) parseCollElemRecord(braceOff int, skipErrors bool) (Record, bool) {
-	p.cursor++ // skip '{'
-	if !p.skipWhitespace() {
-		return Record{}, false
+	nextKind := p.dec.PeekKind()
+	if nextKind == jsontext.KindInvalid {
+		p.readToken()
+		return nil, false
 	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return Record{}, false
-	}
-	if p.src[p.cursor] == '}' {
-		p.cursor++
-		return Record{}, true
-	}
-	if p.src[p.cursor] != '"' {
-		p.syntaxError(p.cursor)
-		return Record{}, false
-	}
-	firstKey, firstKeyOff, ok := p.parseString()
-	if !ok {
-		return Record{}, false
-	}
-	if !p.skipWhitespace() {
-		return Record{}, false
-	}
-	if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-		p.syntaxError(p.cursor)
-		return Record{}, false
-	}
-	p.cursor++
-
-	if firstKey == "$enum" || firstKey == "$qty" || firstKey == "$ref" || firstKey == "$coll" {
-		if !skipErrors {
-			p.recordError(braceOff, "L305", `write {"$coll": {"label": {...}}} with at least one element`)
+	if nextKind == '}' {
+		p.readToken()
+		if collHadError {
+			return nil, false
 		}
-		p.skipMembersAfterColon()
-		return Record{}, false
+		return Collection{Elems: elems}, true
 	}
 
-	val, ok := p.parseRecordMembers(firstKey, firstKeyOff, skipErrors)
+	_, secondKeyOff, ok := p.readToken()
 	if !ok {
-		return Record{}, false
+		return nil, false
 	}
-	return val.(Record), true
+	if !collHadError {
+		p.recordError(secondKeyOff, "L305", "write a tag object with only one key")
+	}
+	p.skipContainerRemainder(depth)
+	return nil, false
 }
 
-func (p *jsonParser) parseRecordMembers(firstKey string, firstKeyOff int, skipErrors bool) (Value, bool) {
+func (p *jsonDecoder) parseRecordMembers(firstKey string, firstKeyOff int) (Record, bool) {
+	if p.syntaxErr {
+		return Record{}, false
+	}
 	seenKeys := make(map[string]bool)
 	var fields []Field
 	recordHadError := false
@@ -1450,26 +972,24 @@ func (p *jsonParser) parseRecordMembers(firstKey string, firstKeyOff int, skipEr
 	curKey := firstKey
 	curKeyOff := firstKeyOff
 
-	for {
+	for !p.syntaxErr {
 		hasKeyError := false
 		if strings.HasPrefix(curKey, "$") {
 			hasKeyError = true
-			if !skipErrors {
-				p.recordError(curKeyOff, "L205", "")
-			}
+			p.recordError(curKeyOff, "L205", "")
 		} else if seenKeys[curKey] {
 			hasKeyError = true
-			if !skipErrors {
-				p.recordError(curKeyOff, "L201", "")
-			}
+			p.recordError(curKeyOff, "L201", "")
 		}
 		seenKeys[curKey] = true
 
 		if hasKeyError {
-			p.skipValue()
 			recordHadError = true
+			if !p.skipValue() {
+				return Record{}, false
+			}
 		} else {
-			val, ok := p.parseValue(skipErrors)
+			val, ok := p.parseValue()
 			if !ok {
 				recordHadError = true
 			} else {
@@ -1477,190 +997,30 @@ func (p *jsonParser) parseRecordMembers(firstKey string, firstKeyOff int, skipEr
 			}
 		}
 
-		if !p.skipWhitespace() {
-			return nil, false
+		if p.syntaxErr {
+			return Record{}, false
 		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, false
+
+		nextKind := p.dec.PeekKind()
+		if nextKind == jsontext.KindInvalid {
+			p.readToken()
+			return Record{}, false
 		}
-		if p.src[p.cursor] == '}' {
-			p.cursor++
+		if nextKind == '}' {
+			p.readToken()
 			break
 		}
-		if p.src[p.cursor] != ',' {
-			p.syntaxError(p.cursor)
-			return nil, false
-		}
-		p.cursor++
-		if !p.skipWhitespace() {
-			return nil, false
-		}
-		if p.cursor >= len(p.src) {
-			p.syntaxError(len(p.src))
-			return nil, false
-		}
-		if p.src[p.cursor] == '}' {
-			p.syntaxError(p.cursor)
-			return nil, false
-		}
-		if p.src[p.cursor] != '"' {
-			p.syntaxError(p.cursor)
-			return nil, false
-		}
-		k, kOff, ok := p.parseString()
+
+		nextKeyTok, nextKeyOff, ok := p.readToken()
 		if !ok {
-			return nil, false
+			return Record{}, false
 		}
-		if !p.skipWhitespace() {
-			return nil, false
-		}
-		if p.cursor >= len(p.src) || p.src[p.cursor] != ':' {
-			p.syntaxError(p.cursor)
-			return nil, false
-		}
-		p.cursor++
-		curKey = k
-		curKeyOff = kOff
+		curKey = nextKeyTok.String()
+		curKeyOff = nextKeyOff
 	}
 
-	if recordHadError {
-		return nil, false
+	if p.syntaxErr || recordHadError {
+		return Record{}, false
 	}
 	return Record{Fields: fields}, true
-}
-
-func (p *jsonParser) parseEnumPayload(skipErrors bool) (Value, bool) {
-	if !p.skipWhitespace() {
-		return nil, false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return nil, false
-	}
-	b := p.src[p.cursor]
-	if b == 'n' {
-		lit, nullOff, ok := p.parseLiteral()
-		if !ok {
-			return nil, false
-		}
-		if lit == "null" && !skipErrors {
-			p.recordError(nullOff, "L302", "")
-		}
-		return nil, false
-	}
-	if b == '"' {
-		str, strOff, ok := p.parseString()
-		if !ok {
-			return nil, false
-		}
-		if isValidEnumName(str) {
-			return Enum(str), true
-		}
-		if !skipErrors {
-			p.recordError(strOff, "L305", `write the enum name as a string, for example {"$enum": "tcp"}`)
-		}
-		return nil, false
-	}
-	valOff := p.cursor
-	p.skipValue()
-	if !skipErrors {
-		p.recordError(valOff, "L305", `write the enum name as a string, for example {"$enum": "tcp"}`)
-	}
-	return nil, false
-}
-
-func (p *jsonParser) parseQtyPayload(skipErrors bool) (Value, bool) {
-	if !p.skipWhitespace() {
-		return nil, false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return nil, false
-	}
-	b := p.src[p.cursor]
-	if b == 'n' {
-		lit, nullOff, ok := p.parseLiteral()
-		if !ok {
-			return nil, false
-		}
-		if lit == "null" && !skipErrors {
-			p.recordError(nullOff, "L302", "")
-		}
-		return nil, false
-	}
-	if b == '"' {
-		str, strOff, ok := p.parseString()
-		if !ok {
-			return nil, false
-		}
-		if len(str) == 0 || (str[0] != '-' && (str[0] < '0' || str[0] > '9')) {
-			if !skipErrors {
-				p.recordError(strOff, "L305", `write the quantity as a string, for example {"$qty": "512Mi"}`)
-			}
-			return nil, false
-		}
-		kind, errCode := lexValidateNumber(str)
-		if kind == tokQuantity && errCode == "" {
-			num, unit := splitQuantity(str)
-			return Quantity{Number: normalizeNumber(num), Unit: unit}, true
-		}
-		if errCode == "L005" {
-			if !skipErrors {
-				p.recordError(strOff, "L005", "")
-			}
-			return nil, false
-		}
-		if !skipErrors {
-			p.recordError(strOff, "L305", `write the quantity as a string, for example {"$qty": "512Mi"}`)
-		}
-		return nil, false
-	}
-	valOff := p.cursor
-	p.skipValue()
-	if !skipErrors {
-		p.recordError(valOff, "L305", `write the quantity as a string, for example {"$qty": "512Mi"}`)
-	}
-	return nil, false
-}
-
-func (p *jsonParser) parseRefPayload(skipErrors bool) (Value, bool) {
-	if !p.skipWhitespace() {
-		return nil, false
-	}
-	if p.cursor >= len(p.src) {
-		p.syntaxError(len(p.src))
-		return nil, false
-	}
-	b := p.src[p.cursor]
-	if b == 'n' {
-		lit, nullOff, ok := p.parseLiteral()
-		if !ok {
-			return nil, false
-		}
-		if lit == "null" && !skipErrors {
-			p.recordError(nullOff, "L302", "")
-		}
-		return nil, false
-	}
-	if b == '"' {
-		str, strOff, ok := p.parseString()
-		if !ok {
-			return nil, false
-		}
-		res := lexScanRef([]byte("&"+str), 0)
-		if res.kind == tokRef && res.length == len(str)+1 && len(res.segs) > 0 {
-			return Ref(res.segs), true
-		}
-		if !skipErrors {
-			p.recordError(strOff, "L305", `write the reference as a string, for example {"$ref": "secret/db-creds"}`)
-		}
-		return nil, false
-	}
-	valOff := p.cursor
-	p.skipValue()
-	if !skipErrors {
-		p.recordError(valOff, "L305", `write the reference as a string, for example {"$ref": "secret/db-creds"}`)
-	}
-	return nil, false
 }

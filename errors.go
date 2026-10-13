@@ -24,15 +24,17 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	var prefix string
-	if e.File != "" && e.Pos.Line > 0 {
-		prefix = e.File + ":" + e.Pos.String() + ": "
-	} else if e.File == "" && e.Pos.Line > 0 {
-		prefix = e.Pos.String() + ": "
-	} else if e.File != "" && e.Pos.Line == 0 {
-		prefix = e.File + ": "
+	var s string
+	if e.File != "" {
+		s += e.File + ":"
 	}
-	s := prefix + e.Code + " " + e.Msg
+	if e.Pos.Line > 0 {
+		s += e.Pos.String() + ":"
+	}
+	if s != "" {
+		s += " "
+	}
+	s += e.Code + " " + e.Msg
 	if e.Hint != "" {
 		s += "\n  hint: " + e.Hint
 	}
