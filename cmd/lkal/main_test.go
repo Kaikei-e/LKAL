@@ -326,7 +326,7 @@ func TestCheckJSONInvalidUTF8FileName(t *testing.T) {
 		return
 	}
 
-	wantFile := strings.ToValidUTF8(path, "")
+	wantFile := strings.ToValidUTF8(path, "\uFFFD")
 	e := entries[0]
 	if e.File != wantFile {
 		t.Errorf("run(%v) entry file mismatch:\ngot %q, want %q\nexit code: got %d\nstdout: got %q\nstderr: got %q", args, e.File, wantFile, code, stdout, stderr)

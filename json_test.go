@@ -1710,7 +1710,7 @@ func TestFromJSONManyErrorsLinear(t *testing.T) {
 		return minDur
 	}
 
-	baseN := 20000
+	baseN := 100000
 	inputN := buildInput(baseN)
 	input4N := buildInput(baseN * 4)
 
