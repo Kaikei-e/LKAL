@@ -1406,7 +1406,7 @@ func TestParseScalesLinearly(t *testing.T) {
 		},
 		{
 			name:  "deep_nesting",
-			baseK: 5000,
+			baseK: 20000,
 			build: func(k int) []byte {
 				return []byte("@lkal \"0.1\"\na = 1\n" + strings.Repeat("a { ", k) + "x = 1" + strings.Repeat(" }", k) + "\n")
 			},
