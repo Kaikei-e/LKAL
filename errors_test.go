@@ -107,9 +107,9 @@ func TestErrorRendering(t *testing.T) {
 			File: "doc.lkal",
 			Pos:  Pos{Line: 1, Col: 5},
 			Code: "L205",
-			Msg:  "$ で始まるキーは書けない",
+			Msg:  "key starts with $",
 		}
-		want := "doc.lkal:1:5: L205 $ で始まるキーは書けない"
+		want := "doc.lkal:1:5: L205 key starts with $"
 		if got := err.Error(); got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -120,10 +120,10 @@ func TestErrorRendering(t *testing.T) {
 			File: "doc.lkal",
 			Pos:  Pos{Line: 2, Col: 3},
 			Code: "L101",
-			Msg:  "見出し行の途中で改行している",
-			Hint: "Key・Label・{ を同じ行に書く",
+			Msg:  "entry header broken across lines",
+			Hint: "keep the key, label and { on one line",
 		}
-		want := "doc.lkal:2:3: L101 見出し行の途中で改行している\n  hint: Key・Label・{ を同じ行に書く"
+		want := "doc.lkal:2:3: L101 entry header broken across lines\n  hint: keep the key, label and { on one line"
 		if got := err.Error(); got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -141,8 +141,8 @@ func TestErrorRendering(t *testing.T) {
 			File: "doc.lkal",
 			Pos:  Pos{Line: 1, Col: 2},
 			Code: "L201",
-			Msg:  "キーまたはラベルが重複している",
-			Hint: "片方を消す",
+			Msg:  "duplicate key or label",
+			Hint: "remove one of them",
 		}
 		list := &ErrorList{Errors: []*Error{err}}
 		want := err.Error()
@@ -177,10 +177,10 @@ func TestErrorRendering(t *testing.T) {
 			File: "web.lkal",
 			Pos:  Pos{Line: 12, Col: 11},
 			Code: "L102",
-			Msg:  "値の位置に裸の単語は書けない",
-			Hint: `文字列なら "tcp"、列挙子なら .tcp と書く`,
+			Msg:  "bare word in value position",
+			Hint: `write "tcp" for a string or .tcp for an enum`,
 		}
-		want := "web.lkal:12:11: L102 値の位置に裸の単語は書けない\n  hint: 文字列なら \"tcp\"、列挙子なら .tcp と書く"
+		want := "web.lkal:12:11: L102 bare word in value position\n  hint: write \"tcp\" for a string or .tcp for an enum"
 		if got := err.Error(); got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -206,9 +206,9 @@ func TestWebLkalExactExample(t *testing.T) {
 	}
 
 	gotSingle := errList.Errors[0]
-	errAssertError(t, gotSingle, "L102", errPos(12, 11), "値の位置に裸の単語は書けない", `文字列なら "tcp"、列挙子なら .tcp と書く`, false)
+	errAssertError(t, gotSingle, "L102", errPos(12, 11), "bare word in value position", `write "tcp" for a string or .tcp for an enum`, false)
 
-	wantRender := "web.lkal:12:11: L102 値の位置に裸の単語は書けない\n  hint: 文字列なら \"tcp\"、列挙子なら .tcp と書く"
+	wantRender := "web.lkal:12:11: L102 bare word in value position\n  hint: write \"tcp\" for a string or .tcp for an enum"
 	if got := err.Error(); got != wantRender {
 		t.Errorf("err.Error() mismatch:\ngot:  %q\nwant: %q", got, wantRender)
 	}
@@ -221,151 +221,151 @@ func TestSyntaxErrors(t *testing.T) {
 			src:      "@lkal \"0.1\"\nkey\n  = 1\n",
 			wantCode: "L101",
 			wantPos:  errPos(2, 4),
-			wantMsg:  "見出し行の途中で改行している",
-			wantHint: "Key・Label・{ を同じ行に書く",
+			wantMsg:  "entry header broken across lines",
+			wantHint: "keep the key, label and { on one line",
 		},
 		{
 			name:     "L101_NewlineAfterRecordKey",
 			src:      "@lkal \"0.1\"\nserver\n{\n}\n",
 			wantCode: "L101",
 			wantPos:  errPos(2, 7),
-			wantMsg:  "見出し行の途中で改行している",
-			wantHint: "Key・Label・{ を同じ行に書く",
+			wantMsg:  "entry header broken across lines",
+			wantHint: "keep the key, label and { on one line",
 		},
 		{
 			name:     "L101_NewlineAfterLabel",
 			src:      "@lkal \"0.1\"\nport \"http\"\n{\n}\n",
 			wantCode: "L101",
 			wantPos:  errPos(2, 12),
-			wantMsg:  "見出し行の途中で改行している",
-			wantHint: "Key・Label・{ を同じ行に書く",
+			wantMsg:  "entry header broken across lines",
+			wantHint: "keep the key, label and { on one line",
 		},
 		{
 			name:     "L101_NewlineAfterUnicodeKey",
 			src:      "@lkal \"0.1\"\n\"設定\"\n  = 1\n",
 			wantCode: "L101",
 			wantPos:  errPos(2, 5),
-			wantMsg:  "見出し行の途中で改行している",
-			wantHint: "Key・Label・{ を同じ行に書く",
+			wantMsg:  "entry header broken across lines",
+			wantHint: "keep the key, label and { on one line",
 		},
 		{
 			name:     "L102_BareWordAssign",
 			src:      "@lkal \"0.1\"\nproto = tcp\n",
 			wantCode: "L102",
 			wantPos:  errPos(2, 9),
-			wantMsg:  "値の位置に裸の単語は書けない",
-			wantHint: `文字列なら "tcp"、列挙子なら .tcp と書く`,
+			wantMsg:  "bare word in value position",
+			wantHint: `write "tcp" for a string or .tcp for an enum`,
 		},
 		{
 			name:     "L102_BareWordInList",
 			src:      "@lkal \"0.1\"\narr = [foo]\n",
 			wantCode: "L102",
 			wantPos:  errPos(2, 8),
-			wantMsg:  "値の位置に裸の単語は書けない",
-			wantHint: `文字列なら "foo"、列挙子なら .foo と書く`,
+			wantMsg:  "bare word in value position",
+			wantHint: `write "foo" for a string or .foo for an enum`,
 		},
 		{
 			name:     "L102_BareWordUnicodeKey",
 			src:      "@lkal \"0.1\"\n\"設定\" = bar\n",
 			wantCode: "L102",
 			wantPos:  errPos(2, 8),
-			wantMsg:  "値の位置に裸の単語は書けない",
-			wantHint: `文字列なら "bar"、列挙子なら .bar と書く`,
+			wantMsg:  "bare word in value position",
+			wantHint: `write "bar" for a string or .bar for an enum`,
 		},
 		{
 			name:     "L103_UnclosedRecord",
 			src:      "@lkal \"0.1\"\nrec {\n  x = 1\n",
 			wantCode: "L103",
 			wantPos:  errPos(2, 5),
-			wantMsg:  "閉じていない括弧",
-			wantHint: "対応する閉じ括弧を書く",
+			wantMsg:  "unclosed bracket",
+			wantHint: "add the matching closing bracket",
 		},
 		{
 			name:     "L103_UnclosedList",
 			src:      "@lkal \"0.1\"\narr = [1, 2\n",
 			wantCode: "L103",
 			wantPos:  errPos(2, 7),
-			wantMsg:  "閉じていない括弧",
-			wantHint: "対応する閉じ括弧を書く",
+			wantMsg:  "unclosed bracket",
+			wantHint: "add the matching closing bracket",
 		},
 		{
 			name:     "L104_BlankLineInRawString",
 			src:      "@lkal \"0.1\"\ns =\n  \\\\line1\n\n  \\\\line2\n",
 			wantCode: "L104",
 			wantPos:  errPos(5, 3),
-			wantMsg:  "複数行文字列の途中に空行かコメントがある",
-			wantHint: `間を詰める。空の行は \\ だけの行で書く`,
+			wantMsg:  "blank line or comment inside a multi-line string",
+			wantHint: `remove the gap; write an empty line as a lone \\`,
 		},
 		{
 			name:     "L104_CommentLineInRawString",
 			src:      "@lkal \"0.1\"\ns =\n  \\\\line1\n  ### gap comment\n  \\\\line2\n",
 			wantCode: "L104",
 			wantPos:  errPos(5, 3),
-			wantMsg:  "複数行文字列の途中に空行かコメントがある",
-			wantHint: `間を詰める。空の行は \\ だけの行で書く`,
+			wantMsg:  "blank line or comment inside a multi-line string",
+			wantHint: `remove the gap; write an empty line as a lone \\`,
 		},
 		{
 			name:     "L104_NoIndentGap",
 			src:      "@lkal \"0.1\"\ns =\n\\\\line1\n\n\\\\line2\n",
 			wantCode: "L104",
 			wantPos:  errPos(5, 1),
-			wantMsg:  "複数行文字列の途中に空行かコメントがある",
-			wantHint: `間を詰める。空の行は \\ だけの行で書く`,
+			wantMsg:  "blank line or comment inside a multi-line string",
+			wantHint: `remove the gap; write an empty line as a lone \\`,
 		},
 		{
 			name:     "L105_MissingVersionNonEmpty",
 			src:      "key = 1\n",
 			wantCode: "L105",
 			wantPos:  errPos(1, 1),
-			wantMsg:  "版の宣言がない、先頭にない、または2回以上ある",
-			wantHint: `先頭に @lkal "0.1" を1回だけ書く`,
+			wantMsg:  "missing, misplaced or repeated version declaration",
+			wantHint: `write @lkal "0.1" once, at the top`,
 		},
 		{
 			name:     "L105_MissingVersionEmpty",
 			src:      "",
 			wantCode: "L105",
 			wantPos:  errPos(1, 1),
-			wantMsg:  "版の宣言がない、先頭にない、または2回以上ある",
-			wantHint: `先頭に @lkal "0.1" を1回だけ書く`,
+			wantMsg:  "missing, misplaced or repeated version declaration",
+			wantHint: `write @lkal "0.1" once, at the top`,
 		},
 		{
 			name:     "L105_MissingVersionOnlyComments",
 			src:      "### just a comment\n",
 			wantCode: "L105",
 			wantPos:  errPos(2, 1),
-			wantMsg:  "版の宣言がない、先頭にない、または2回以上ある",
-			wantHint: `先頭に @lkal "0.1" を1回だけ書く`,
+			wantMsg:  "missing, misplaced or repeated version declaration",
+			wantHint: `write @lkal "0.1" once, at the top`,
 		},
 		{
 			name:     "L105_DuplicateVersion",
 			src:      "@lkal \"0.1\"\n@lkal \"0.1\"\n",
 			wantCode: "L105",
 			wantPos:  errPos(2, 1),
-			wantMsg:  "版の宣言がない、先頭にない、または2回以上ある",
-			wantHint: `先頭に @lkal "0.1" を1回だけ書く`,
+			wantMsg:  "missing, misplaced or repeated version declaration",
+			wantHint: `write @lkal "0.1" once, at the top`,
 		},
 		{
 			name:     "L105_NonStringVersionInt",
 			src:      "@lkal 1\n",
 			wantCode: "L105",
 			wantPos:  errPos(1, 7),
-			wantMsg:  "版の宣言がない、先頭にない、または2回以上ある",
-			wantHint: `先頭に @lkal "0.1" を1回だけ書く`,
+			wantMsg:  "missing, misplaced or repeated version declaration",
+			wantHint: `write @lkal "0.1" once, at the top`,
 		},
 		{
 			name:     "L105_NonStringVersionBool",
 			src:      "@lkal true\n",
 			wantCode: "L105",
 			wantPos:  errPos(1, 7),
-			wantMsg:  "版の宣言がない、先頭にない、または2回以上ある",
-			wantHint: `先頭に @lkal "0.1" を1回だけ書く`,
+			wantMsg:  "missing, misplaced or repeated version declaration",
+			wantHint: `write @lkal "0.1" once, at the top`,
 		},
 		{
 			name:              "L106_ReservedWordTrueKey",
 			src:               "@lkal \"0.1\"\ntrue = 1\n",
 			wantCode:          "L106",
 			wantPos:           errPos(2, 1),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 		{
@@ -373,7 +373,7 @@ func TestSyntaxErrors(t *testing.T) {
 			src:               "@lkal \"0.1\"\nfalse = 2\n",
 			wantCode:          "L106",
 			wantPos:           errPos(2, 1),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 		{
@@ -381,7 +381,7 @@ func TestSyntaxErrors(t *testing.T) {
 			src:               "@lkal \"0.1\"\nk = {\n}\n",
 			wantCode:          "L106",
 			wantPos:           errPos(2, 5),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 		{
@@ -389,7 +389,7 @@ func TestSyntaxErrors(t *testing.T) {
 			src:               "@lkal \"0.1\"\nk =\n### comment\n",
 			wantCode:          "L106",
 			wantPos:           errPos(3, 1),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 		{
@@ -397,7 +397,7 @@ func TestSyntaxErrors(t *testing.T) {
 			src:               "@lkal \"0.1\"\nlist = [1 2]\n",
 			wantCode:          "L106",
 			wantPos:           errPos(2, 11),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 		{
@@ -405,7 +405,7 @@ func TestSyntaxErrors(t *testing.T) {
 			src:               "@lkal \"0.1\"\nlist = [[]]\n",
 			wantCode:          "L106",
 			wantPos:           errPos(2, 9),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 		{
@@ -413,7 +413,7 @@ func TestSyntaxErrors(t *testing.T) {
 			src:               "@lkal \"0.1\"\na = 1 b = 2\n",
 			wantCode:          "L106",
 			wantPos:           errPos(2, 7),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 		{
@@ -421,7 +421,7 @@ func TestSyntaxErrors(t *testing.T) {
 			src:               "@lkal \"0.1\"\n\\\\orphan\n",
 			wantCode:          "L106",
 			wantPos:           errPos(2, 1),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 	}
@@ -444,192 +444,192 @@ func TestSemanticErrors(t *testing.T) {
 			src:      "@lkal \"0.1\"\na = 1\na = 2\n",
 			wantCode: "L201",
 			wantPos:  errPos(3, 1),
-			wantMsg:  "キーまたはラベルが重複している",
-			wantHint: "片方を消す",
+			wantMsg:  "duplicate key or label",
+			wantHint: "remove one of them",
 		},
 		{
 			name:     "L201_DuplicateRecordKey",
 			src:      "@lkal \"0.1\"\nrec {}\nrec {}\n",
 			wantCode: "L201",
 			wantPos:  errPos(3, 1),
-			wantMsg:  "キーまたはラベルが重複している",
-			wantHint: "片方を消す",
+			wantMsg:  "duplicate key or label",
+			wantHint: "remove one of them",
 		},
 		{
 			name:     "L201_DuplicateCollectionLabel",
 			src:      "@lkal \"0.1\"\ncoll \"a\" {}\ncoll \"a\" {}\n",
 			wantCode: "L201",
 			wantPos:  errPos(3, 6),
-			wantMsg:  "キーまたはラベルが重複している",
-			wantHint: "片方を消す",
+			wantMsg:  "duplicate key or label",
+			wantHint: "remove one of them",
 		},
 		{
 			name:     "L201_DuplicateUnicodeLabel",
 			src:      "@lkal \"0.1\"\nsvc \"日本語\" {}\nsvc \"日本語\" {}\n",
 			wantCode: "L201",
 			wantPos:  errPos(3, 5),
-			wantMsg:  "キーまたはラベルが重複している",
-			wantHint: "片方を消す",
+			wantMsg:  "duplicate key or label",
+			wantHint: "remove one of them",
 		},
 		{
 			name:     "L202_AssignThenRecord",
 			src:      "@lkal \"0.1\"\nk = 1\nk {}\n",
 			wantCode: "L202",
 			wantPos:  errPos(3, 1),
-			wantMsg:  "1つのキーを複数の種類に使っている",
-			wantHint: "代入・レコード・コレクションのどれか1種類にそろえる",
+			wantMsg:  "key used for more than one kind of entry",
+			wantHint: "use the key for one kind only: assignment, record or collection",
 		},
 		{
 			name:     "L202_RecordThenCollection",
 			src:      "@lkal \"0.1\"\nk {}\nk \"a\" {}\n",
 			wantCode: "L202",
 			wantPos:  errPos(3, 1),
-			wantMsg:  "1つのキーを複数の種類に使っている",
-			wantHint: "代入・レコード・コレクションのどれか1種類にそろえる",
+			wantMsg:  "key used for more than one kind of entry",
+			wantHint: "use the key for one kind only: assignment, record or collection",
 		},
 		{
 			name:     "L202_CollectionThenAssign",
 			src:      "@lkal \"0.1\"\nk \"a\" {}\nk = 1\n",
 			wantCode: "L202",
 			wantPos:  errPos(3, 1),
-			wantMsg:  "1つのキーを複数の種類に使っている",
-			wantHint: "代入・レコード・コレクションのどれか1種類にそろえる",
+			wantMsg:  "key used for more than one kind of entry",
+			wantHint: "use the key for one kind only: assignment, record or collection",
 		},
 		{
 			name:     "L203_SeparatedByAssign",
 			src:      "@lkal \"0.1\"\nport \"http\" {}\nhost = \"localhost\"\nport \"grpc\" {}\n",
 			wantCode: "L203",
 			wantPos:  errPos(4, 1),
-			wantMsg:  "コレクションの要素が連続していない",
-			wantHint: "要素をまとめて書く",
+			wantMsg:  "collection elements are not contiguous",
+			wantHint: "write the elements next to each other",
 		},
 		{
 			name:     "L203_SeparatedByRecord",
 			src:      "@lkal \"0.1\"\nw \"a\" {}\nm {}\nw \"b\" {}\n",
 			wantCode: "L203",
 			wantPos:  errPos(4, 1),
-			wantMsg:  "コレクションの要素が連続していない",
-			wantHint: "要素をまとめて書く",
+			wantMsg:  "collection elements are not contiguous",
+			wantHint: "write the elements next to each other",
 		},
 		{
 			name:     "L203_SeparatedInNestedRecord",
 			src:      "@lkal \"0.1\"\nbox {\n  item \"a\" {}\n  cnt = 1\n  item \"b\" {}\n}\n",
 			wantCode: "L203",
 			wantPos:  errPos(5, 3),
-			wantMsg:  "コレクションの要素が連続していない",
-			wantHint: "要素をまとめて書く",
+			wantMsg:  "collection elements are not contiguous",
+			wantHint: "write the elements next to each other",
 		},
 		{
 			name:     "L204_IntAndString",
 			src:      "@lkal \"0.1\"\nl = [1, \"two\"]\n",
 			wantCode: "L204",
 			wantPos:  errPos(2, 9),
-			wantMsg:  "型の混ざったリスト",
-			wantHint: "要素を同じ型にそろえる",
+			wantMsg:  "list mixes types",
+			wantHint: "use one type for all elements",
 		},
 		{
 			name:     "L204_IntAndDecimal",
 			src:      "@lkal \"0.1\"\nl = [1, 2.5]\n",
 			wantCode: "L204",
 			wantPos:  errPos(2, 9),
-			wantMsg:  "型の混ざったリスト",
-			wantHint: "要素を同じ型にそろえる",
+			wantMsg:  "list mixes types",
+			wantHint: "use one type for all elements",
 		},
 		{
 			name:     "L204_DecimalAndInt",
 			src:      "@lkal \"0.1\"\nl = [1.5, 2]\n",
 			wantCode: "L204",
 			wantPos:  errPos(2, 11),
-			wantMsg:  "型の混ざったリスト",
-			wantHint: "要素を同じ型にそろえる",
+			wantMsg:  "list mixes types",
+			wantHint: "use one type for all elements",
 		},
 		{
 			name:     "L204_BoolAndEnum",
 			src:      "@lkal \"0.1\"\nl = [true, .active]\n",
 			wantCode: "L204",
 			wantPos:  errPos(2, 12),
-			wantMsg:  "型の混ざったリスト",
-			wantHint: "要素を同じ型にそろえる",
+			wantMsg:  "list mixes types",
+			wantHint: "use one type for all elements",
 		},
 		{
 			name:     "L204_StringAndRef",
 			src:      "@lkal \"0.1\"\nl = [\"a\", &ref/one]\n",
 			wantCode: "L204",
 			wantPos:  errPos(2, 11),
-			wantMsg:  "型の混ざったリスト",
-			wantHint: "要素を同じ型にそろえる",
+			wantMsg:  "list mixes types",
+			wantHint: "use one type for all elements",
 		},
 		{
 			name:     "L205_BareDollarKey",
 			src:      "@lkal \"0.1\"\n\"$foo\" = 1\n",
 			wantCode: "L205",
 			wantPos:  errPos(2, 1),
-			wantMsg:  "$ で始まるキーは書けない",
-			wantHint: "キー名を変える",
+			wantMsg:  "key starts with $",
+			wantHint: "rename the key",
 		},
 		{
 			name:     "L205_QuotedDollarKey",
 			src:      "@lkal \"0.1\"\n\"$schema\" = \"test\"\n",
 			wantCode: "L205",
 			wantPos:  errPos(2, 1),
-			wantMsg:  "$ で始まるキーは書けない",
-			wantHint: "キー名を変える",
+			wantMsg:  "key starts with $",
+			wantHint: "rename the key",
 		},
 		{
 			name:     "L205_DollarRecordKey",
 			src:      "@lkal \"0.1\"\n\"$rec\" {}\n",
 			wantCode: "L205",
 			wantPos:  errPos(2, 1),
-			wantMsg:  "$ で始まるキーは書けない",
-			wantHint: "キー名を変える",
+			wantMsg:  "key starts with $",
+			wantHint: "rename the key",
 		},
 		{
 			name:     "L205_DollarCollectionKey",
 			src:      "@lkal \"0.1\"\n\"$coll\" \"a\" {}\n",
 			wantCode: "L205",
 			wantPos:  errPos(2, 1),
-			wantMsg:  "$ で始まるキーは書けない",
-			wantHint: "キー名を変える",
+			wantMsg:  "key starts with $",
+			wantHint: "rename the key",
 		},
 		{
 			name:     "L206_CollectionAssign",
 			src:      "@lkal \"0.1\"\nitem \"lbl\" = 1\n",
 			wantCode: "L206",
 			wantPos:  errPos(2, 12),
-			wantMsg:  "コレクションの要素に値を代入している",
-			wantHint: `key "label" { … } のようにブロックで書く`,
+			wantMsg:  "value assigned to a collection element",
+			wantHint: `write a block instead: key "label" { ... }`,
 		},
 		{
 			name:     "L206_CollectionAssignSpaced",
 			src:      "@lkal \"0.1\"\nitem \"lbl\"   = 1\n",
 			wantCode: "L206",
 			wantPos:  errPos(2, 14),
-			wantMsg:  "コレクションの要素に値を代入している",
-			wantHint: `key "label" { … } のようにブロックで書く`,
+			wantMsg:  "value assigned to a collection element",
+			wantHint: `write a block instead: key "label" { ... }`,
 		},
 		{
 			name:     "L207_Version02",
 			src:      "@lkal \"0.2\"\n",
 			wantCode: "L207",
 			wantPos:  errPos(1, 7),
-			wantMsg:  "対応していない版",
-			wantHint: `このバージョンが受け付けるのは "0.1" だけ`,
+			wantMsg:  "unsupported version",
+			wantHint: `this implementation accepts only "0.1"`,
 		},
 		{
 			name:     "L207_Version10",
 			src:      "@lkal \"1.0\"\n",
 			wantCode: "L207",
 			wantPos:  errPos(1, 7),
-			wantMsg:  "対応していない版",
-			wantHint: `このバージョンが受け付けるのは "0.1" だけ`,
+			wantMsg:  "unsupported version",
+			wantHint: `this implementation accepts only "0.1"`,
 		},
 		{
 			name:     "L207_Version010",
 			src:      "@lkal \"0.10\"\n",
 			wantCode: "L207",
 			wantPos:  errPos(1, 7),
-			wantMsg:  "対応していない版",
-			wantHint: `このバージョンが受け付けるのは "0.1" だけ`,
+			wantMsg:  "unsupported version",
+			wantHint: `this implementation accepts only "0.1"`,
 		},
 	}
 
@@ -685,8 +685,8 @@ func TestSemanticPrecedence(t *testing.T) {
 		if len(errList.Errors) != 2 {
 			t.Fatalf("expected exactly 2 errors, got %d: %v", len(errList.Errors), errList.Error())
 		}
-		errAssertError(t, errList.Errors[0], "L205", errPos(2, 1), "$ で始まるキーは書けない", "キー名を変える", false)
-		errAssertError(t, errList.Errors[1], "L205", errPos(3, 1), "$ で始まるキーは書けない", "キー名を変える", false)
+		errAssertError(t, errList.Errors[0], "L205", errPos(2, 1), "key starts with $", "rename the key", false)
+		errAssertError(t, errList.Errors[1], "L205", errPos(3, 1), "key starts with $", "rename the key", false)
 	})
 
 	t.Run("L205_Over_L201", func(t *testing.T) {
@@ -699,8 +699,8 @@ func TestSemanticPrecedence(t *testing.T) {
 		if len(errList.Errors) != 2 {
 			t.Fatalf("expected exactly 2 errors, got %d: %v", len(errList.Errors), errList.Error())
 		}
-		errAssertError(t, errList.Errors[0], "L205", errPos(2, 1), "$ で始まるキーは書けない", "キー名を変える", false)
-		errAssertError(t, errList.Errors[1], "L205", errPos(3, 1), "$ で始まるキーは書けない", "キー名を変える", false)
+		errAssertError(t, errList.Errors[0], "L205", errPos(2, 1), "key starts with $", "rename the key", false)
+		errAssertError(t, errList.Errors[1], "L205", errPos(3, 1), "key starts with $", "rename the key", false)
 	})
 
 	t.Run("L202_Over_L201", func(t *testing.T) {
@@ -709,7 +709,7 @@ func TestSemanticPrecedence(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error, got file: %v", file)
 		}
-		errCheckSingle(t, err, "L202", errPos(3, 1), "1つのキーを複数の種類に使っている", "代入・レコード・コレクションのどれか1種類にそろえる", false)
+		errCheckSingle(t, err, "L202", errPos(3, 1), "key used for more than one kind of entry", "use the key for one kind only: assignment, record or collection", false)
 	})
 
 	t.Run("L201_Over_L203", func(t *testing.T) {
@@ -718,7 +718,7 @@ func TestSemanticPrecedence(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error, got file: %v", file)
 		}
-		errCheckSingle(t, err, "L201", errPos(4, 6), "キーまたはラベルが重複している", "片方を消す", false)
+		errCheckSingle(t, err, "L201", errPos(4, 6), "duplicate key or label", "remove one of them", false)
 	})
 }
 
@@ -751,7 +751,7 @@ func TestInnermostL103(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error, got file: %v", file)
 			}
-			errCheckSingle(t, err, "L103", tt.wantPos, "閉じていない括弧", "対応する閉じ括弧を書く", false)
+			errCheckSingle(t, err, "L103", tt.wantPos, "unclosed bracket", "add the matching closing bracket", false)
 		})
 	}
 }
@@ -763,7 +763,7 @@ func TestSyntaxRecovery(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error, got file: %v", file)
 		}
-		errCheckSingle(t, err, "L102", errPos(3, 7), "値の位置に裸の単語は書けない", `文字列なら "bad1"、列挙子なら .bad1 と書く`, false)
+		errCheckSingle(t, err, "L102", errPos(3, 7), "bare word in value position", `write "bad1" for a string or .bad1 for an enum`, false)
 	})
 
 	t.Run("MultipleTopLevelEntriesRecover", func(t *testing.T) {
@@ -776,9 +776,9 @@ func TestSyntaxRecovery(t *testing.T) {
 		if len(errList.Errors) != 3 {
 			t.Fatalf("expected 3 errors, got %d", len(errList.Errors))
 		}
-		errAssertError(t, errList.Errors[0], "L102", errPos(2, 5), "値の位置に裸の単語は書けない", `文字列なら "bad1"、列挙子なら .bad1 と書く`, false)
-		errAssertError(t, errList.Errors[1], "L102", errPos(3, 5), "値の位置に裸の単語は書けない", `文字列なら "bad2"、列挙子なら .bad2 と書く`, false)
-		errAssertError(t, errList.Errors[2], "L102", errPos(4, 5), "値の位置に裸の単語は書けない", `文字列なら "bad3"、列挙子なら .bad3 と書く`, false)
+		errAssertError(t, errList.Errors[0], "L102", errPos(2, 5), "bare word in value position", `write "bad1" for a string or .bad1 for an enum`, false)
+		errAssertError(t, errList.Errors[1], "L102", errPos(3, 5), "bare word in value position", `write "bad2" for a string or .bad2 for an enum`, false)
+		errAssertError(t, errList.Errors[2], "L102", errPos(4, 5), "bare word in value position", `write "bad3" for a string or .bad3 for an enum`, false)
 	})
 
 	t.Run("NestedBracesTrackDepth", func(t *testing.T) {
@@ -787,7 +787,7 @@ func TestSyntaxRecovery(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error, got file: %v", file)
 		}
-		errCheckSingle(t, err, "L102", errPos(4, 9), "値の位置に裸の単語は書けない", `文字列なら "bad1"、列挙子なら .bad1 と書く`, false)
+		errCheckSingle(t, err, "L102", errPos(4, 9), "bare word in value position", `write "bad1" for a string or .bad1 for an enum`, false)
 	})
 }
 
@@ -884,88 +884,88 @@ func TestLexicalSuppression(t *testing.T) {
 			src:      "@lkal \"0.1\"\n# bad comment\na = 1\n",
 			wantCode: "L001",
 			wantPos:  errPos(2, 1),
-			wantMsg:  "# か ## で始まるコメントは書けない",
-			wantHint: "### で始める",
+			wantMsg:  "comment starts with # or ##",
+			wantHint: "start the comment with ###",
 		},
 		{
 			name:     "L002_TrailingComment",
 			src:      "@lkal \"0.1\"\na = 1 # bad comment\n",
 			wantCode: "L002",
 			wantPos:  errPos(2, 7),
-			wantMsg:  "行末やリストの内側にはコメントを書けない",
-			wantHint: "リストの外の、独立した行に移す",
+			wantMsg:  "comment at the end of a line or inside a list",
+			wantHint: "move the comment to its own line outside the list",
 		},
 		{
 			name:     "L002_ListCommentLineContinuation",
 			src:      "@lkal \"0.1\"\na = [\n  ### c\n  1,\n]\n",
 			wantCode: "L002",
 			wantPos:  errPos(3, 3),
-			wantMsg:  "行末やリストの内側にはコメントを書けない",
-			wantHint: "リストの外の、独立した行に移す",
+			wantMsg:  "comment at the end of a line or inside a list",
+			wantHint: "move the comment to its own line outside the list",
 		},
 		{
 			name:     "L002_ListInlineCommentContinuation",
 			src:      "@lkal \"0.1\"\na = [1, # bad\n 2]\n",
 			wantCode: "L002",
 			wantPos:  errPos(2, 9),
-			wantMsg:  "行末やリストの内側にはコメントを書けない",
-			wantHint: "リストの外の、独立した行に移す",
+			wantMsg:  "comment at the end of a line or inside a list",
+			wantHint: "move the comment to its own line outside the list",
 		},
 		{
 			name:     "L003_BadEscape",
 			src:      "@lkal \"0.1\"\na = \"bad \\x escape\"\n",
 			wantCode: "L003",
 			wantPos:  errPos(2, 10),
-			wantMsg:  "使えないエスケープ",
-			wantHint: `\u{…} を使う`,
+			wantMsg:  "invalid escape sequence",
+			wantHint: `use \u{...}`,
 		},
 		{
 			name:     "L004_QuantityBadUnit",
 			src:      "@lkal \"0.1\"\na = 1h30m\n",
 			wantCode: "L004",
 			wantPos:  errPos(2, 5),
-			wantMsg:  "単位の後ろに数字が続いている",
-			wantHint: "単位を1つにする（例: 90m）",
+			wantMsg:  "digits after a unit",
+			wantHint: "use a single unit (for example 90m)",
 		},
 		{
 			name:     "L005_NumberTooLong",
 			src:      "@lkal \"0.1\"\na = 99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999\n",
 			wantCode: "L005",
 			wantPos:  errPos(2, 5),
-			wantMsg:  "数値が範囲を超えている",
-			wantHint: "整数は int64 の範囲、数値は100桁以内に収める",
+			wantMsg:  "number out of range",
+			wantHint: "keep integers within int64 and numbers within 100 digits",
 		},
 		{
 			name:     "L006_UnknownDirective",
 			src:      "@unknown \"0.1\"\na = 1\n",
 			wantCode: "L006",
 			wantPos:  errPos(1, 1),
-			wantMsg:  "使えないディレクティブ",
-			wantHint: "v0.1で使えるのは @lkal だけ",
+			wantMsg:  "unknown directive",
+			wantHint: "v0.1 supports only @lkal",
 		},
 		{
 			name:     "L007_UnclosedString",
 			src:      "@lkal \"0.1\"\na = \"unclosed\n",
 			wantCode: "L007",
 			wantPos:  errPos(2, 5),
-			wantMsg:  "閉じていない文字列",
-			wantHint: `同じ行で " を閉じる。複数行の文字列は \\ 行で書く`,
+			wantMsg:  "unterminated string",
+			wantHint: `close the string on the same line; write multi-line strings as \\ lines`,
 		},
 		{
 			name:     "L008_IllegalChar",
 			src:      "@lkal \"0.1\"\na = %\n",
 			wantCode: "L008",
 			wantPos:  errPos(2, 5),
-			wantMsg:  "使えない文字",
-			wantHint: `文字を消す。制御文字は \u{…} で書く`,
+			wantMsg:  "invalid character",
+			wantHint: `remove the character; write control characters as \u{...}`,
 		},
 		{
 			name:     "L009_MalformedToken",
 			src:      "@lkal \"0.1\"\na = .123\n",
 			wantCode: "L009",
 			wantPos:  errPos(2, 5),
-			wantMsg:  "トークンの形が正しくない",
-			wantHint: "数値・列挙子・参照・ディレクティブの書き方に合わせる",
+			wantMsg:  "malformed token",
+			wantHint: "follow the syntax for numbers, enums, references and directives",
 		},
 	}
 
@@ -1125,31 +1125,31 @@ func TestUnicodeColumns(t *testing.T) {
 			src:      "@lkal \"0.1\"\n\"日本語キー\" = bad\n",
 			wantCode: "L102",
 			wantPos:  errPos(2, 11),
-			wantMsg:  "値の位置に裸の単語は書けない",
-			wantHint: `文字列なら "bad"、列挙子なら .bad と書く`,
+			wantMsg:  "bare word in value position",
+			wantHint: `write "bad" for a string or .bad for an enum`,
 		},
 		{
 			name:     "EmojiInStringKey",
 			src:      "@lkal \"0.1\"\n\"🚀🎉\" = bad\n",
 			wantCode: "L102",
 			wantPos:  errPos(2, 8),
-			wantMsg:  "値の位置に裸の単語は書けない",
-			wantHint: `文字列なら "bad"、列挙子なら .bad と書く`,
+			wantMsg:  "bare word in value position",
+			wantHint: `write "bad" for a string or .bad for an enum`,
 		},
 		{
 			name:     "TabCountedAsOne",
 			src:      "@lkal \"0.1\"\nk = \t\tbare\n",
 			wantCode: "L102",
 			wantPos:  errPos(2, 7),
-			wantMsg:  "値の位置に裸の単語は書けない",
-			wantHint: `文字列なら "bare"、列挙子なら .bare と書く`,
+			wantMsg:  "bare word in value position",
+			wantHint: `write "bare" for a string or .bare for an enum`,
 		},
 		{
 			name:              "TabIndentation",
 			src:               "@lkal \"0.1\"\n\t\t= 1\n",
 			wantCode:          "L106",
 			wantPos:           errPos(2, 3),
-			wantMsg:           "予期しないトークン",
+			wantMsg:           "unexpected token",
 			checkNonEmptyHint: true,
 		},
 	}
@@ -1176,7 +1176,7 @@ func TestUnicodeColumns(t *testing.T) {
 		}
 		wantPositions := []Pos{errPos(2, 1), errPos(2, 2), errPos(2, 3)}
 		for i, wantP := range wantPositions {
-			errAssertError(t, errList.Errors[i], "L008", wantP, "使えない文字", `文字を消す。制御文字は \u{…} で書く`, false)
+			errAssertError(t, errList.Errors[i], "L008", wantP, "invalid character", `remove the character; write control characters as \u{...}`, false)
 		}
 	})
 }
@@ -1531,105 +1531,105 @@ func TestUnexpectedTokenHints(t *testing.T) {
 			src:      "@lkal \"0.1\"\n}\n",
 			line:     2,
 			col:      1,
-			wantHint: "項目は キー = 値、キー { … }、キー \"ラベル\" { … } のどれかで始める",
+			wantHint: `start an entry with key = value, key { ... } or key "label" { ... }`,
 		},
 		{
 			name:     "entry_start_raw_line",
 			src:      "@lkal \"0.1\"\n\\\\x\n",
 			line:     2,
 			col:      1,
-			wantHint: "項目は キー = 値、キー { … }、キー \"ラベル\" { … } のどれかで始める",
+			wantHint: `start an entry with key = value, key { ... } or key "label" { ... }`,
 		},
 		{
 			name:     "keyword_as_key",
 			src:      "@lkal \"0.1\"\ntrue = 1\n",
 			line:     2,
 			col:      1,
-			wantHint: "予約語をキーにするときは引用符で囲む",
+			wantHint: "quote a reserved word to use it as a key",
 		},
 		{
 			name:     "after_key",
 			src:      "@lkal \"0.1\"\na 1\n",
 			line:     2,
 			col:      3,
-			wantHint: "キーの後ろには =、{、\"ラベル\" のどれかを書く",
+			wantHint: `follow the key with =, { or "label"`,
 		},
 		{
 			name:     "after_label",
 			src:      "@lkal \"0.1\"\na \"x\" 1\n",
 			line:     2,
 			col:      7,
-			wantHint: "ラベルの後ろには { を書く",
+			wantHint: "follow the label with {",
 		},
 		{
 			name:     "after_value",
 			src:      "@lkal \"0.1\"\na = 1 b = 2\n",
 			line:     2,
 			col:      7,
-			wantHint: "項目の間は改行かカンマで区切る",
+			wantHint: "separate entries with a newline or a comma",
 		},
 		{
 			name:     "brace_after_equal",
 			src:      "@lkal \"0.1\"\na = { b = 1 }\n",
 			line:     2,
 			col:      5,
-			wantHint: "レコードは = を付けずに key { … } と書く",
+			wantHint: "write a record without =: key { ... }",
 		},
 		{
 			name:     "nested_list_in_list",
 			src:      "@lkal \"0.1\"\na = [[1]]\n",
 			line:     2,
 			col:      6,
-			wantHint: "リストの要素にはスカラーだけを書ける",
+			wantHint: "use only scalars as list elements",
 		},
 		{
 			name:     "record_in_list",
 			src:      "@lkal \"0.1\"\na = [{}]\n",
 			line:     2,
 			col:      6,
-			wantHint: "リストの要素にはスカラーだけを書ける",
+			wantHint: "use only scalars as list elements",
 		},
 		{
 			name:     "missing_comma_in_list",
 			src:      "@lkal \"0.1\"\na = [1 2]\n",
 			line:     2,
 			col:      8,
-			wantHint: "リストの要素は , で区切る",
+			wantHint: "separate list elements with ,",
 		},
 		{
 			name:     "unexpected_closing_bracket_in_assign",
 			src:      "@lkal \"0.1\"\na = ]\n",
 			line:     2,
 			col:      5,
-			wantHint: `値には文字列・数値・量・真偽値・列挙子・参照・リスト・\\ 行のどれかを書く`,
+			wantHint: `write a value: string, number, quantity, boolean, enum, reference, list or \\ lines`,
 		},
 		{
 			name:     "unexpected_equal_in_list",
 			src:      "@lkal \"0.1\"\na = [=]\n",
 			line:     2,
 			col:      6,
-			wantHint: `値には文字列・数値・量・真偽値・列挙子・参照・リスト・\\ 行のどれかを書く`,
+			wantHint: `write a value: string, number, quantity, boolean, enum, reference, list or \\ lines`,
 		},
 		{
 			name:     "comment_between_assign_and_value",
 			src:      "@lkal \"0.1\"\na =\n### c\n",
 			line:     3,
 			col:      1,
-			wantHint: "= と値の間にコメント行は書けない",
+			wantHint: "move the comment above the entry",
 		},
 		{
 			name:     "version_trailing_character",
 			src:      "@lkal \"0.1\" a = 1\n",
 			line:     1,
 			col:      13,
-			wantHint: "版の宣言の後ろは改行する",
+			wantHint: "end the line after the version declaration",
 		},
 		{
 			name:     "closing_brace_after_top_level_value",
 			src:      "@lkal \"0.1\"\na = [1, \"x\"] }\n",
 			line:     2,
 			col:      14,
-			wantHint: "項目の間は改行かカンマで区切る",
+			wantHint: "separate entries with a newline or a comma",
 		},
 	}
 

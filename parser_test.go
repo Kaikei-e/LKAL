@@ -1078,7 +1078,7 @@ port =    tcp
 		if file != nil {
 			t.Errorf("expected nil File on error, got %v", file)
 		}
-		want := "web.lkal:12:11: L102 値の位置に裸の単語は書けない\n  hint: 文字列なら \"tcp\"、列挙子なら .tcp と書く"
+		want := "web.lkal:12:11: L102 bare word in value position\n  hint: write \"tcp\" for a string or .tcp for an enum"
 		if got := err.Error(); got != want {
 			t.Errorf("err.Error() mismatch:\ngot:  %q\nwant: %q", got, want)
 		}

@@ -28,40 +28,40 @@ type lexTestExpectedErr struct {
 
 var lexTestExpectedErrTable = map[string]lexTestExpectedErr{
 	"L001": {
-		msg:  "# か ## で始まるコメントは書けない",
-		hint: "### で始める",
+		msg:  "comment starts with # or ##",
+		hint: "start the comment with ###",
 	},
 	"L002": {
-		msg:  "行末やリストの内側にはコメントを書けない",
-		hint: "リストの外の、独立した行に移す",
+		msg:  "comment at the end of a line or inside a list",
+		hint: "move the comment to its own line outside the list",
 	},
 	"L003": {
-		msg:  "使えないエスケープ",
-		hint: `\u{…} を使う`,
+		msg:  "invalid escape sequence",
+		hint: `use \u{...}`,
 	},
 	"L004": {
-		msg:  "単位の後ろに数字が続いている",
-		hint: "単位を1つにする（例: 90m）",
+		msg:  "digits after a unit",
+		hint: "use a single unit (for example 90m)",
 	},
 	"L005": {
-		msg:  "数値が範囲を超えている",
-		hint: "整数は int64 の範囲、数値は100桁以内に収める",
+		msg:  "number out of range",
+		hint: "keep integers within int64 and numbers within 100 digits",
 	},
 	"L006": {
-		msg:  "使えないディレクティブ",
-		hint: "v0.1で使えるのは @lkal だけ",
+		msg:  "unknown directive",
+		hint: "v0.1 supports only @lkal",
 	},
 	"L007": {
-		msg:  "閉じていない文字列",
-		hint: `同じ行で " を閉じる。複数行の文字列は \\ 行で書く`,
+		msg:  "unterminated string",
+		hint: `close the string on the same line; write multi-line strings as \\ lines`,
 	},
 	"L008": {
-		msg:  "使えない文字",
-		hint: `文字を消す。制御文字は \u{…} で書く`,
+		msg:  "invalid character",
+		hint: `remove the character; write control characters as \u{...}`,
 	},
 	"L009": {
-		msg:  "トークンの形が正しくない",
-		hint: "数値・列挙子・参照・ディレクティブの書き方に合わせる",
+		msg:  "malformed token",
+		hint: "follow the syntax for numbers, enums, references and directives",
 	},
 }
 

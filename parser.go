@@ -184,7 +184,7 @@ func (p *parser) parseHeader(file *File) {
 		if tok.kind == tokNewline || tok.kind == tokEOF {
 			return
 		}
-		p.syntaxError(tok, "L106", "版の宣言の後ろは改行する")
+		p.syntaxError(tok, "L106", "end the line after the version declaration")
 	} else {
 		tok = valTok
 		p.syntaxError(tok, "L105", "")
@@ -271,7 +271,7 @@ func (p *parser) parseBracedBlock() (*block, bool) {
 func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRawAssign bool) (*entry, bool) {
 	tok := p.peek()
 	if tok.kind == tokBool {
-		p.syntaxError(tok, "L106", "予約語をキーにするときは引用符で囲む")
+		p.syntaxError(tok, "L106", "quote a reserved word to use it as a key")
 		return nil, false
 	}
 	if tok.kind == tokDirective {
@@ -343,7 +343,7 @@ func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRawAssi
 			return nil, false
 		}
 		if afterLabel.kind != tokLBrace {
-			p.syntaxError(afterLabel, "L106", "ラベルの後ろには { を書く")
+			p.syntaxError(afterLabel, "L106", "follow the label with {")
 			return nil, false
 		}
 
@@ -354,7 +354,7 @@ func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRawAssi
 		ent.body = body
 
 	default:
-		p.syntaxError(afterKey, "L106", "キーの後ろには =、{、\"ラベル\" のどれかを書く")
+		p.syntaxError(afterKey, "L106", `follow the key with =, { or "label"`)
 		return nil, false
 	}
 
@@ -372,7 +372,7 @@ func (p *parser) checkSeparator() bool {
 	if nxt.kind == tokRBrace && len(p.brackets) > 0 && p.brackets[len(p.brackets)-1].kind == tokLBrace {
 		return true
 	}
-	p.syntaxError(nxt, "L106", "項目の間は改行かカンマで区切る")
+	p.syntaxError(nxt, "L106", "separate entries with a newline or a comma")
 	return false
 }
 
@@ -417,11 +417,11 @@ func (p *parser) parseAssignValue() (node, bool) {
 		return p.parseRaw(), true
 	}
 	if tok.kind == tokComment {
-		p.syntaxError(tok, "L106", "= と値の間にコメント行は書けない")
+		p.syntaxError(tok, "L106", "move the comment above the entry")
 		return nil, false
 	}
 	if tok.kind == tokLBrace {
-		p.syntaxError(tok, "L106", "レコードは = を付けずに key { … } と書く")
+		p.syntaxError(tok, "L106", "write a record without =: key { ... }")
 		return nil, false
 	}
 	return p.parseScalarOrError()
@@ -430,7 +430,7 @@ func (p *parser) parseAssignValue() (node, bool) {
 func (p *parser) parseListElem() (*scalarNode, bool) {
 	tok := p.peek()
 	if tok.kind == tokLBrack || tok.kind == tokLBrace {
-		p.syntaxError(tok, "L106", "リストの要素にはスカラーだけを書ける")
+		p.syntaxError(tok, "L106", "use only scalars as list elements")
 		return nil, false
 	}
 	return p.parseScalarOrError()
@@ -443,14 +443,14 @@ func (p *parser) parseScalarOrError() (*scalarNode, bool) {
 		return parseScalar(tok), true
 	}
 	if tok.kind == tokName {
-		p.syntaxError(tok, "L102", fmt.Sprintf("文字列なら %q、列挙子なら .%s と書く", tok.text, tok.text))
+		p.syntaxError(tok, "L102", fmt.Sprintf("write %q for a string or .%s for an enum", tok.text, tok.text))
 		return nil, false
 	}
 	if tok.kind == tokDirective {
 		p.syntaxError(tok, "L105", "")
 		return nil, false
 	}
-	p.syntaxError(tok, "L106", "値には文字列・数値・量・真偽値・列挙子・参照・リスト・\\\\ 行のどれかを書く")
+	p.syntaxError(tok, "L106", `write a value: string, number, quantity, boolean, enum, reference, list or \\ lines`)
 	return nil, false
 }
 
@@ -495,7 +495,7 @@ func (p *parser) parseList() (*listNode, bool) {
 			if sep.kind == tokRBrack {
 				break
 			}
-			p.syntaxError(sep, "L106", "リストの要素は , で区切る")
+			p.syntaxError(sep, "L106", "separate list elements with ,")
 			return nil, false
 		}
 	}

@@ -238,9 +238,7 @@ func isHexDigit(b byte) bool {
 }
 
 func lexCommentText(rawAfterHashes string) string {
-	if strings.HasPrefix(rawAfterHashes, " ") {
-		rawAfterHashes = rawAfterHashes[1:]
-	}
+	rawAfterHashes = strings.TrimPrefix(rawAfterHashes, " ")
 	return strings.TrimRight(rawAfterHashes, " \t")
 }
 
