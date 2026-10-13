@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	"errors"
-	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,124 +14,88 @@ func ToJSON(f *File, plain bool) ([]byte, error) {
 	if f == nil {
 		return nil, errors.New("lkal: nil File")
 	}
-	var buf bytes.Buffer
-	enc := jsontext.NewEncoder(&buf, jsontext.WithIndent("  "))
-	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
-		return nil, err
-	}
+	top := f.Data()
 	if !plain {
-		if err := enc.WriteToken(jsontext.String("$lkal")); err != nil {
-			return nil, err
-		}
-		if err := enc.WriteToken(jsontext.String(f.Version())); err != nil {
-			return nil, err
-		}
+		top.Fields = append([]Field{{Key: "$lkal", Value: String(f.Version())}}, top.Fields...)
 	}
-	for _, field := range f.Data().Fields {
-		if err := enc.WriteToken(jsontext.String(field.Key)); err != nil {
-			return nil, err
-		}
-		if err := writeJSONValue(enc, field.Value, plain); err != nil {
-			return nil, err
-		}
-	}
-	if err := enc.WriteToken(jsontext.EndObject); err != nil {
-		return nil, err
+	var buf bytes.Buffer
+	w := &jsonWriter{enc: jsontext.NewEncoder(&buf, jsontext.WithIndent("  ")), plain: plain}
+	w.value(top)
+	if w.err != nil {
+		return nil, w.err
 	}
 	return buf.Bytes(), nil
 }
 
-func writeJSONValue(enc *jsontext.Encoder, v Value, plain bool) error {
-	switch val := v.(type) {
-	case String:
-		return enc.WriteToken(jsontext.String(string(val)))
-	case Int:
-		return enc.WriteToken(jsontext.Int(int64(val)))
-	case Decimal:
-		return enc.WriteValue(jsontext.Value(val))
-	case Bool:
-		return enc.WriteToken(jsontext.Bool(bool(val)))
-	case Enum:
-		if plain {
-			return enc.WriteToken(jsontext.String(string(val)))
-		}
-		return writeTag(enc, "$enum", string(val))
-	case Quantity:
-		payload := val.Number + val.Unit
-		if plain {
-			return enc.WriteToken(jsontext.String(payload))
-		}
-		return writeTag(enc, "$qty", payload)
-	case Ref:
-		payload := refBody(val)
-		if plain {
-			return enc.WriteToken(jsontext.String(payload))
-		}
-		return writeTag(enc, "$ref", payload)
-	case List:
-		if err := enc.WriteToken(jsontext.BeginArray); err != nil {
-			return err
-		}
-		for _, el := range val {
-			if err := writeJSONValue(enc, el, plain); err != nil {
-				return err
-			}
-		}
-		return enc.WriteToken(jsontext.EndArray)
-	case Record:
-		if err := enc.WriteToken(jsontext.BeginObject); err != nil {
-			return err
-		}
-		for _, f := range val.Fields {
-			if err := enc.WriteToken(jsontext.String(f.Key)); err != nil {
-				return err
-			}
-			if err := writeJSONValue(enc, f.Value, plain); err != nil {
-				return err
-			}
-		}
-		return enc.WriteToken(jsontext.EndObject)
-	case Collection:
-		if !plain {
-			if err := enc.WriteToken(jsontext.BeginObject); err != nil {
-				return err
-			}
-			if err := enc.WriteToken(jsontext.String("$coll")); err != nil {
-				return err
-			}
-		}
-		if err := enc.WriteToken(jsontext.BeginObject); err != nil {
-			return err
-		}
-		for _, el := range val.Elems {
-			if err := enc.WriteToken(jsontext.String(el.Label)); err != nil {
-				return err
-			}
-			if err := writeJSONValue(enc, el.Body, plain); err != nil {
-				return err
-			}
-		}
-		if err := enc.WriteToken(jsontext.EndObject); err != nil {
-			return err
-		}
-		if !plain {
-			return enc.WriteToken(jsontext.EndObject)
-		}
-	}
-	return nil
+type jsonWriter struct {
+	enc   *jsontext.Encoder
+	plain bool
+	err   error
 }
 
-func writeTag(enc *jsontext.Encoder, tag, payload string) error {
-	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
-		return err
+func (w *jsonWriter) token(t jsontext.Token) {
+	if w.err == nil {
+		w.err = w.enc.WriteToken(t)
 	}
-	if err := enc.WriteToken(jsontext.String(tag)); err != nil {
-		return err
+}
+
+func (w *jsonWriter) value(v Value) {
+	switch v := v.(type) {
+	case String:
+		w.token(jsontext.String(string(v)))
+	case Int:
+		w.token(jsontext.Int(int64(v)))
+	case Decimal:
+		if w.err == nil {
+			w.err = w.enc.WriteValue(jsontext.Value(v))
+		}
+	case Bool:
+		w.token(jsontext.Bool(bool(v)))
+	case Enum:
+		w.tag("$enum", string(v))
+	case Quantity:
+		w.tag("$qty", v.Number+v.Unit)
+	case Ref:
+		w.tag("$ref", refBody(v))
+	case List:
+		w.token(jsontext.BeginArray)
+		for _, el := range v {
+			w.value(el)
+		}
+		w.token(jsontext.EndArray)
+	case Record:
+		w.token(jsontext.BeginObject)
+		for _, f := range v.Fields {
+			w.token(jsontext.String(f.Key))
+			w.value(f.Value)
+		}
+		w.token(jsontext.EndObject)
+	case Collection:
+		if !w.plain {
+			w.token(jsontext.BeginObject)
+			w.token(jsontext.String("$coll"))
+		}
+		w.token(jsontext.BeginObject)
+		for _, el := range v.Elems {
+			w.token(jsontext.String(el.Label))
+			w.value(el.Body)
+		}
+		w.token(jsontext.EndObject)
+		if !w.plain {
+			w.token(jsontext.EndObject)
+		}
 	}
-	if err := enc.WriteToken(jsontext.String(payload)); err != nil {
-		return err
+}
+
+func (w *jsonWriter) tag(name, payload string) {
+	if w.plain {
+		w.token(jsontext.String(payload))
+		return
 	}
-	return enc.WriteToken(jsontext.EndObject)
+	w.token(jsontext.BeginObject)
+	w.token(jsontext.String(name))
+	w.token(jsontext.String(payload))
+	w.token(jsontext.EndObject)
 }
 
 func nodeFromValue(v Value) node {
@@ -147,36 +110,20 @@ func nodeFromValue(v Value) node {
 }
 
 func blockFromRecord(r Record) *block {
-	var entries []*entry
+	b := &block{}
 	for _, f := range r.Fields {
 		switch val := f.Value.(type) {
 		case Record:
-			entries = append(entries, &entry{
-				kind: entryRecord,
-				key:  f.Key,
-				body: blockFromRecord(val),
-			})
+			b.entries = append(b.entries, &entry{kind: entryRecord, key: f.Key, body: blockFromRecord(val)})
 		case Collection:
 			for _, el := range val.Elems {
-				entries = append(entries, &entry{
-					kind:  entryElem,
-					key:   f.Key,
-					label: el.Label,
-					body:  blockFromRecord(el.Body),
-				})
+				b.entries = append(b.entries, &entry{kind: entryElem, key: f.Key, label: el.Label, body: blockFromRecord(el.Body)})
 			}
 		default:
-			entries = append(entries, &entry{
-				kind:  entryAssign,
-				key:   f.Key,
-				value: nodeFromValue(val),
-			})
+			b.entries = append(b.entries, &entry{kind: entryAssign, key: f.Key, value: nodeFromValue(val)})
 		}
 	}
-	return &block{
-		entries: entries,
-		oneLine: false,
-	}
+	return b
 }
 
 func scalarType(v Value) string {
@@ -214,813 +161,446 @@ func isValidEnumName(s string) bool {
 
 func parseRefBody(s string) (Ref, bool) {
 	res := lexScanRef([]byte("&"+s), 0)
-	if res.kind == tokRef && res.length == len(s)+1 && len(res.segs) > 0 {
+	if res.kind == tokRef && res.length == len(s)+1 {
 		return Ref(res.segs), true
 	}
 	return nil, false
 }
 
-type rawError struct {
-	offset int
-	code   string
-	hint   string
+const (
+	hintVersion = `start the top-level object with "$lkal": "0.1"`
+	hintOneKey  = "write a tag object with only one key"
+)
+
+var tagHints = map[string]string{
+	"$enum": `write the enum name as a string, for example {"$enum": "tcp"}`,
+	"$qty":  `write the quantity as a string, for example {"$qty": "512Mi"}`,
+	"$ref":  `write the reference as a string, for example {"$ref": "secret/db-creds"}`,
+	"$coll": `write {"$coll": {"label": {...}}} with at least one element`,
 }
 
-type jsonDecoder struct {
-	src       []byte
-	dec       *jsontext.Decoder
-	errors    []rawError
-	syntaxErr bool
+type jsonError struct {
+	off        int
+	code, hint string
 }
 
-func (p *jsonDecoder) recordError(offset int, code, hint string) {
-	p.errors = append(p.errors, rawError{offset: offset, code: code, hint: hint})
+type jsonReader struct {
+	src    []byte
+	dec    *jsontext.Decoder
+	errs   []jsonError
+	broken bool
 }
 
-func (p *jsonDecoder) nextTokenStart() int {
-	off := int(p.dec.InputOffset())
-	for off < len(p.src) {
-		b := p.src[off]
-		if b == ' ' || b == '\t' || b == '\r' || b == '\n' || b == ',' || b == ':' {
-			off++
-			continue
+func FromJSON(src []byte) (*File, error) {
+	r := &jsonReader{src: src, dec: jsontext.NewDecoder(bytes.NewReader(src), jsontext.AllowDuplicateNames(true))}
+	data := r.top()
+	if !r.broken {
+		rest := src[r.dec.InputOffset():]
+		if n := len(rest) - len(bytes.TrimLeft(rest, " \t\r\n")); n < len(rest) {
+			r.fail(int(r.dec.InputOffset())+n, "L301", "")
 		}
-		break
 	}
-	return off
+	if len(r.errs) > 0 {
+		return nil, r.errorList()
+	}
+	return &File{version: "0.1", body: blockFromRecord(data)}, nil
 }
 
-func tagHint(tag string) string {
-	switch tag {
-	case "$enum":
-		return `write the enum name as a string, for example {"$enum": "tcp"}`
-	case "$qty":
-		return `write the quantity as a string, for example {"$qty": "512Mi"}`
-	case "$ref":
-		return `write the reference as a string, for example {"$ref": "secret/db-creds"}`
-	default:
-		return `write {"$coll": {"label": {...}}} with at least one element`
-	}
+func (r *jsonReader) fail(off int, code, hint string) {
+	r.errs = append(r.errs, jsonError{off, code, hint})
 }
 
-func (p *jsonDecoder) handleSyntaxError(err error) {
-	if p.syntaxErr {
-		return
-	}
-	p.syntaxErr = true
-	var synErr *jsontext.SyntacticError
-	if errors.As(err, &synErr) {
-		hint := ""
-		if synErr.Err != nil && strings.Contains(synErr.Err.Error(), "depth") {
-			hint = "nest objects and arrays at most 10000 levels deep"
-		}
-		p.recordError(int(synErr.ByteOffset), "L301", hint)
-	} else if err == io.EOF || err == io.ErrUnexpectedEOF {
-		p.recordError(len(p.src), "L301", "")
-	}
-}
-
-func (p *jsonDecoder) readToken() (jsontext.Token, int, bool) {
-	if p.syntaxErr {
+func (r *jsonReader) next() (jsontext.Token, int, bool) {
+	if r.broken {
 		return jsontext.Token{}, 0, false
 	}
-	off := p.nextTokenStart()
-	tok, err := p.dec.ReadToken()
+	off := int(r.dec.InputOffset())
+	for off < len(r.src) && strings.IndexByte(" \t\r\n,:", r.src[off]) >= 0 {
+		off++
+	}
+	tok, err := r.dec.ReadToken()
 	if err != nil {
-		p.handleSyntaxError(err)
-		return jsontext.Token{}, off, false
+		r.broken = true
+		off, hint := len(r.src), ""
+		var se *jsontext.SyntacticError
+		if errors.As(err, &se) {
+			off = int(se.ByteOffset)
+			if strings.Contains(err.Error(), "max depth") {
+				hint = "nest objects and arrays at most 10000 levels deep"
+			}
+		}
+		r.fail(off, "L301", hint)
+		return tok, off, false
 	}
 	return tok, off, true
 }
 
-func (p *jsonDecoder) skipValue() bool {
-	if p.syntaxErr {
-		return false
+func (r *jsonReader) skip(tok jsontext.Token) {
+	if k := tok.Kind(); k == '[' || k == '{' {
+		r.skipTo(r.dec.StackDepth() - 1)
 	}
-	if err := p.dec.SkipValue(); err != nil {
-		p.handleSyntaxError(err)
-		return false
-	}
-	return true
 }
 
-func (p *jsonDecoder) skipContainerRemainder(targetDepth int) {
-	for !p.syntaxErr && p.dec.StackDepth() >= targetDepth {
-		if _, _, ok := p.readToken(); !ok {
+func (r *jsonReader) skipTo(depth int) {
+	for r.dec.StackDepth() > depth {
+		if _, _, ok := r.next(); !ok {
 			return
 		}
 	}
 }
 
-func (p *jsonDecoder) checkTrailing() {
-	if p.syntaxErr {
-		return
-	}
-	for off := int(p.dec.InputOffset()); off < len(p.src); off++ {
-		b := p.src[off]
-		if b != ' ' && b != '\t' && b != '\r' && b != '\n' {
-			p.handleSyntaxError(&jsontext.SyntacticError{ByteOffset: int64(off)})
-			break
-		}
+func (r *jsonReader) skipValue() {
+	if tok, _, ok := r.next(); ok {
+		r.skip(tok)
 	}
 }
 
-func (p *jsonDecoder) buildErrorList() *ErrorList {
-	sort.SliceStable(p.errors, func(i, j int) bool {
-		if p.errors[i].offset != p.errors[j].offset {
-			return p.errors[i].offset < p.errors[j].offset
-		}
-		return p.errors[i].code < p.errors[j].code
-	})
-
-	n := len(p.errors)
-	if n > 20 {
-		n = 20
-	}
-	kept := p.errors[:n]
-
-	res := make([]*Error, len(kept))
-	cur := 0
-	curLine := 1
-	curCol := 1
-
-	for idx, rErr := range kept {
-		targetOff := rErr.offset
-		if targetOff > len(p.src) {
-			targetOff = len(p.src)
-		}
-		for cur < targetOff && cur < len(p.src) {
-			if p.src[cur] == '\n' {
-				curLine++
-				curCol = 1
-				cur++
-			} else {
-				_, sz := utf8.DecodeRune(p.src[cur:])
-				if cur+sz > targetOff {
-					sz = 1
-				}
-				curCol++
-				cur += sz
-			}
-		}
-		res[idx] = newError("", Pos{Line: curLine, Col: curCol}, rErr.code, rErr.hint)
-	}
-
-	return &ErrorList{Errors: res}
-}
-
-func FromJSON(src []byte) (*File, error) {
-	dec := jsontext.NewDecoder(bytes.NewReader(src), jsontext.AllowDuplicateNames(true))
-	p := &jsonDecoder{src: src, dec: dec}
-
-	if len(bytes.Trim(src, " \t\r\n")) == 0 {
-		p.recordError(len(src), "L301", "")
-		return nil, p.buildErrorList()
-	}
-
-	kind := dec.PeekKind()
-	if kind == jsontext.KindInvalid {
-		p.readToken()
-		return nil, p.buildErrorList()
-	}
-
-	topOff := p.nextTokenStart()
-	if kind != '{' {
-		if _, _, ok := p.readToken(); !ok {
-			return nil, p.buildErrorList()
-		}
-		p.recordError(topOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-		if kind == '[' {
-			p.skipContainerRemainder(p.dec.StackDepth())
-		}
-		p.checkTrailing()
-		return nil, p.buildErrorList()
-	}
-
-	if _, _, ok := p.readToken(); !ok {
-		return nil, p.buildErrorList()
-	}
-
-	if dec.PeekKind() == '}' {
-		closeOff := p.nextTokenStart()
-		p.readToken()
-		p.recordError(closeOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-		p.checkTrailing()
-		return nil, p.buildErrorList()
-	}
-
-	firstKeyTok, firstKeyOff, ok := p.readToken()
+func (r *jsonReader) top() Record {
+	tok, off, ok := r.next()
 	if !ok {
-		return nil, p.buildErrorList()
+		return Record{}
 	}
-	firstKey := firstKeyTok.String()
-
-	seenKeys := make(map[string]bool)
-	var topFields []Field
-
-	if firstKey == "$lkal" {
-		valOff := p.nextTokenStart()
-		switch dec.PeekKind() {
-		case 'n':
-			if _, _, ok := p.readToken(); ok {
-				p.recordError(valOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-			}
-		case '"':
-			verTok, verOff, ok := p.readToken()
-			if !ok {
-				return nil, p.buildErrorList()
-			}
-			if verTok.String() != "0.1" {
-				p.recordError(verOff, "L207", "")
-			}
-		default:
-			p.recordError(valOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-			if !p.skipValue() {
-				return nil, p.buildErrorList()
-			}
-		}
-	} else {
-		p.recordError(firstKeyOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-		hasKeyError := false
-		if strings.HasPrefix(firstKey, "$") {
-			hasKeyError = true
-			p.recordError(firstKeyOff, "L205", "")
-		}
-		seenKeys[firstKey] = true
-		if hasKeyError {
-			if !p.skipValue() {
-				return nil, p.buildErrorList()
-			}
-		} else {
-			val, ok := p.parseValue()
-			if ok {
-				topFields = append(topFields, Field{Key: firstKey, Value: val})
-			}
-		}
+	if tok.Kind() != '{' {
+		r.fail(off, "L105", hintVersion)
+		r.skip(tok)
+		return Record{}
 	}
-
-	if p.syntaxErr {
-		return nil, p.buildErrorList()
+	if tok, off, ok = r.next(); !ok {
+		return Record{}
 	}
-
-	for !p.syntaxErr {
-		kind := dec.PeekKind()
-		if kind == jsontext.KindInvalid {
-			p.readToken()
-			return nil, p.buildErrorList()
-		}
-		if kind == '}' {
-			p.readToken()
-			break
-		}
-
-		kTok, kOff, ok := p.readToken()
-		if !ok {
-			return nil, p.buildErrorList()
-		}
-		k := kTok.String()
-
-		hasKeyError := false
-		if k == "$lkal" {
-			hasKeyError = true
-			p.recordError(kOff, "L105", `start the top-level object with "$lkal": "0.1"`)
-		} else if strings.HasPrefix(k, "$") {
-			hasKeyError = true
-			p.recordError(kOff, "L205", "")
-		} else if seenKeys[k] {
-			hasKeyError = true
-			p.recordError(kOff, "L201", "")
-		}
-		seenKeys[k] = true
-
-		if hasKeyError {
-			if !p.skipValue() {
-				return nil, p.buildErrorList()
-			}
-		} else {
-			val, ok := p.parseValue()
-			if ok {
-				topFields = append(topFields, Field{Key: k, Value: val})
-			}
-		}
+	if tok.Kind() == '}' {
+		r.fail(off, "L105", hintVersion)
+		return Record{}
 	}
-
-	if p.syntaxErr {
-		return nil, p.buildErrorList()
+	if key := tok.String(); key != "$lkal" {
+		r.fail(off, "L105", hintVersion)
+		rec, _ := r.members(key, off, 0, true)
+		return rec
 	}
-
-	p.checkTrailing()
-
-	if len(p.errors) > 0 {
-		return nil, p.buildErrorList()
+	if tok, off, ok = r.next(); !ok {
+		return Record{}
 	}
-
-	return &File{version: "0.1", body: blockFromRecord(Record{Fields: topFields})}, nil
+	if tok.Kind() != '"' {
+		r.fail(off, "L105", hintVersion)
+		r.skip(tok)
+	} else if tok.String() != "0.1" {
+		r.fail(off, "L207", "")
+	}
+	if tok, off, ok = r.next(); !ok || tok.Kind() == '}' {
+		return Record{}
+	}
+	rec, _ := r.members(tok.String(), off, 0, true)
+	return rec
 }
 
-func (p *jsonDecoder) parseValue() (Value, bool) {
-	if p.syntaxErr {
+func (r *jsonReader) members(key string, off, depth int, top bool) (Record, bool) {
+	var rec Record
+	seen := map[string]bool{}
+	ok := true
+	for {
+		var code, hint string
+		switch {
+		case top && key == "$lkal":
+			code, hint = "L105", hintVersion
+		case strings.HasPrefix(key, "$"):
+			code = "L205"
+		case seen[key]:
+			code = "L201"
+		}
+		seen[key] = true
+		if code != "" {
+			r.fail(off, code, hint)
+			r.skipValue()
+			ok = false
+		} else if v, vok := r.value(depth+1, false); vok {
+			rec.Fields = append(rec.Fields, Field{Key: key, Value: v})
+		} else {
+			ok = false
+		}
+		tok, tokOff, rok := r.next()
+		if !rok {
+			return Record{}, false
+		}
+		if tok.Kind() == '}' {
+			return rec, ok
+		}
+		key, off = tok.String(), tokOff
+	}
+}
+
+func (r *jsonReader) value(depth int, inList bool) (Value, bool) {
+	tok, off, ok := r.next()
+	if !ok {
 		return nil, false
 	}
-	kind := p.dec.PeekKind()
-	if kind == jsontext.KindInvalid {
-		p.readToken()
-		return nil, false
-	}
+	return r.convert(tok, off, depth, inList)
+}
 
-	off := p.nextTokenStart()
-
-	switch kind {
+func (r *jsonReader) convert(tok jsontext.Token, off, depth int, inList bool) (Value, bool) {
+	switch tok.Kind() {
 	case 'n':
-		if _, _, ok := p.readToken(); ok {
-			p.recordError(off, "L302", "")
-		}
-		return nil, false
-
+		r.fail(off, "L302", "")
 	case 't', 'f':
-		tok, _, ok := p.readToken()
-		if !ok {
-			return nil, false
-		}
 		return Bool(tok.Bool()), true
-
 	case '"':
-		tok, _, ok := p.readToken()
-		if !ok {
-			return nil, false
-		}
 		return String(tok.String()), true
-
 	case '0':
-		tok, _, ok := p.readToken()
-		if !ok {
-			return nil, false
-		}
 		raw := tok.String()
 		if strings.ContainsAny(raw, "eE") {
-			p.recordError(off, "L303", "")
+			r.fail(off, "L303", "")
 			return nil, false
 		}
-		valKind, errCode := lexValidateNumber(raw)
-		if errCode == "L005" {
-			p.recordError(off, "L005", "")
+		kind, code := lexValidateNumber(raw)
+		if code != "" {
+			r.fail(off, code, "")
 			return nil, false
 		}
-		if valKind == tokDecimal {
+		if kind == tokDecimal {
 			return Decimal(normalizeNumber(raw)), true
 		}
 		n, _ := strconv.ParseInt(raw, 10, 64)
 		return Int(n), true
-
 	case '[':
-		p.readToken()
-		return p.parseArray()
-
+		if !inList {
+			return r.list(depth)
+		}
+		r.fail(off, "L304", "")
+		r.skip(tok)
 	case '{':
-		p.readToken()
-		return p.parseObject()
-
-	default:
-		p.readToken()
-		return nil, false
+		return r.object(off, depth, inList)
 	}
+	return nil, false
 }
 
-func (p *jsonDecoder) parseArray() (Value, bool) {
-	if p.syntaxErr {
+func (r *jsonReader) object(off, depth int, inList bool) (Value, bool) {
+	tok, keyOff, ok := r.next()
+	if !ok {
 		return nil, false
 	}
-	if p.dec.PeekKind() == ']' {
-		p.readToken()
-		return List{}, true
-	}
-
-	var elements []Value
-	var elemOffsets []int
-	hadElementError := false
-
-	for !p.syntaxErr {
-		elemKind := p.dec.PeekKind()
-		if elemKind == jsontext.KindInvalid {
-			p.readToken()
+	if tok.Kind() == '}' {
+		if inList {
+			r.fail(off, "L304", "")
 			return nil, false
 		}
-		elemOff := p.nextTokenStart()
-
-		if elemKind == '[' {
-			p.recordError(elemOff, "L304", "")
-			hadElementError = true
-			if !p.skipValue() {
-				return nil, false
-			}
-		} else if elemKind == '{' {
-			braceOff := elemOff
-			if _, _, ok := p.readToken(); !ok {
-				return nil, false
-			}
-			recDepth := p.dec.StackDepth()
-			if p.dec.PeekKind() == '}' {
-				p.readToken()
-				p.recordError(braceOff, "L304", "")
-				hadElementError = true
-			} else {
-				firstKeyTok, _, ok := p.readToken()
-				if !ok {
-					return nil, false
-				}
-				firstKey := firstKeyTok.String()
-				if firstKey == "$enum" || firstKey == "$qty" || firstKey == "$ref" {
-					tagVal, ok := p.parseScalarTag(firstKey)
-					if !ok {
-						hadElementError = true
-					} else {
-						elements = append(elements, tagVal)
-						elemOffsets = append(elemOffsets, braceOff)
-					}
-				} else {
-					p.recordError(braceOff, "L304", "")
-					hadElementError = true
-					p.skipContainerRemainder(recDepth)
-					if p.syntaxErr {
-						return nil, false
-					}
-				}
-			}
-		} else {
-			val, ok := p.parseValue()
-			if !ok {
-				hadElementError = true
-			} else {
-				elements = append(elements, val)
-				elemOffsets = append(elemOffsets, elemOff)
-			}
-		}
-
-		if p.syntaxErr {
+		if depth > maxBlockDepth {
+			r.fail(off, "L107", "")
 			return nil, false
 		}
-
-		nextKind := p.dec.PeekKind()
-		if nextKind == jsontext.KindInvalid {
-			p.readToken()
-			return nil, false
-		}
-		if nextKind == ']' {
-			p.readToken()
-			break
-		}
-	}
-
-	if p.syntaxErr || hadElementError {
-		return nil, false
-	}
-
-	if len(elements) > 1 {
-		firstType := scalarType(elements[0])
-		for i := 1; i < len(elements); i++ {
-			if scalarType(elements[i]) != firstType {
-				p.recordError(elemOffsets[i], "L204", "")
-				return nil, false
-			}
-		}
-	}
-
-	return List(elements), true
-}
-
-func (p *jsonDecoder) parseObject() (Value, bool) {
-	if p.syntaxErr {
-		return nil, false
-	}
-	if p.dec.PeekKind() == '}' {
-		p.readToken()
 		return Record{}, true
 	}
-
-	firstKeyTok, firstKeyOff, ok := p.readToken()
-	if !ok {
+	key := tok.String()
+	_, isTag := tagHints[key]
+	if inList && (!isTag || key == "$coll") {
+		r.fail(off, "L304", "")
+		r.skipTo(r.dec.StackDepth() - 1)
 		return nil, false
 	}
-	firstKey := firstKeyTok.String()
-
-	switch firstKey {
-	case "$enum", "$qty", "$ref":
-		return p.parseScalarTag(firstKey)
-	case "$coll":
-		return p.parseCollTag()
-	default:
-		return p.parseRecordMembers(firstKey, firstKeyOff)
+	if isTag {
+		return r.tag(key, depth-1)
 	}
+	if depth > maxBlockDepth {
+		r.fail(off, "L107", "")
+		r.skipTo(r.dec.StackDepth() - 1)
+		return nil, false
+	}
+	return r.members(key, keyOff, depth, false)
 }
 
-func (p *jsonDecoder) parseScalarTag(tag string) (Value, bool) {
-	if p.syntaxErr {
-		return nil, false
-	}
-	depth := p.dec.StackDepth()
-	payloadKind := p.dec.PeekKind()
-	if payloadKind == jsontext.KindInvalid {
-		p.readToken()
-		return nil, false
-	}
-	payloadOff := p.nextTokenStart()
-
-	if payloadKind == 'n' {
-		if _, _, ok := p.readToken(); ok {
-			p.recordError(payloadOff, "L302", "")
-		}
-		p.skipContainerRemainder(depth)
-		return nil, false
-	}
-
-	var val Value
-	if payloadKind == '"' {
-		tok, _, ok := p.readToken()
-		if !ok {
+func (r *jsonReader) list(depth int) (Value, bool) {
+	list := List{}
+	var offs []int
+	ok := true
+	for {
+		tok, off, rok := r.next()
+		if !rok {
 			return nil, false
 		}
-		s := tok.String()
-		switch tag {
-		case "$enum":
-			if isValidEnumName(s) {
-				val = Enum(s)
-			} else {
-				p.recordError(payloadOff, "L305", tagHint(tag))
-			}
-		case "$qty":
-			if len(s) == 0 || (s[0] != '-' && (s[0] < '0' || s[0] > '9')) {
-				p.recordError(payloadOff, "L305", tagHint(tag))
-			} else {
-				kind, errCode := lexValidateNumber(s)
-				if kind == tokQuantity && errCode == "" {
-					num, unit := splitQuantity(s)
-					val = Quantity{Number: normalizeNumber(num), Unit: unit}
-				} else if errCode == "L005" {
-					p.recordError(payloadOff, "L005", "")
-				} else {
-					p.recordError(payloadOff, "L305", tagHint(tag))
-				}
-			}
-		case "$ref":
-			if ref, ok := parseRefBody(s); ok {
-				val = ref
-			} else {
-				p.recordError(payloadOff, "L305", tagHint(tag))
-			}
-		}
-	} else {
-		p.recordError(payloadOff, "L305", tagHint(tag))
-		p.skipContainerRemainder(depth)
-		return nil, false
-	}
-
-	if val == nil {
-		p.skipContainerRemainder(depth)
-		return nil, false
-	}
-
-	if p.syntaxErr {
-		return nil, false
-	}
-
-	nextKind := p.dec.PeekKind()
-	if nextKind == jsontext.KindInvalid {
-		p.readToken()
-		return nil, false
-	}
-	if nextKind == '}' {
-		p.readToken()
-		return val, true
-	}
-
-	_, kOff, ok := p.readToken()
-	if !ok {
-		return nil, false
-	}
-	p.recordError(kOff, "L305", "write a tag object with only one key")
-	p.skipContainerRemainder(depth)
-	return nil, false
-}
-
-func (p *jsonDecoder) parseCollTag() (Value, bool) {
-	if p.syntaxErr {
-		return nil, false
-	}
-	depth := p.dec.StackDepth()
-	payloadKind := p.dec.PeekKind()
-	if payloadKind == jsontext.KindInvalid {
-		p.readToken()
-		return nil, false
-	}
-	payloadOff := p.nextTokenStart()
-
-	if payloadKind == 'n' {
-		if _, _, ok := p.readToken(); ok {
-			p.recordError(payloadOff, "L302", "")
-		}
-		p.skipContainerRemainder(depth)
-		return nil, false
-	}
-
-	collHint := tagHint("$coll")
-	if payloadKind != '{' {
-		p.recordError(payloadOff, "L305", collHint)
-		p.skipContainerRemainder(depth)
-		return nil, false
-	}
-
-	collObjOff := payloadOff
-	if _, _, ok := p.readToken(); !ok {
-		return nil, false
-	}
-
-	if p.dec.PeekKind() == '}' {
-		p.readToken()
-		p.recordError(collObjOff, "L305", collHint)
-		p.skipContainerRemainder(depth)
-		return nil, false
-	}
-
-	seenLabels := make(map[string]bool)
-	var elems []Elem
-	collHadError := false
-
-	for !p.syntaxErr {
-		kind := p.dec.PeekKind()
-		if kind == jsontext.KindInvalid {
-			p.readToken()
-			return nil, false
-		}
-		if kind == '}' {
-			p.readToken()
+		if tok.Kind() == ']' {
 			break
 		}
-
-		labelTok, labelOff, ok := p.readToken()
-		if !ok {
-			return nil, false
-		}
-		label := labelTok.String()
-
-		isDup := seenLabels[label]
-		if isDup {
-			p.recordError(labelOff, "L201", "")
-			collHadError = true
-			if !p.skipValue() {
-				return nil, false
-			}
-			continue
-		}
-		seenLabels[label] = true
-
-		valKind := p.dec.PeekKind()
-		if valKind == jsontext.KindInvalid {
-			p.readToken()
-			return nil, false
-		}
-		valOff := p.nextTokenStart()
-
-		if valKind == 'n' {
-			if _, _, ok := p.readToken(); ok {
-				p.recordError(valOff, "L302", "")
-			}
-			collHadError = true
-			continue
-		}
-
-		if valKind != '{' {
-			p.recordError(valOff, "L305", collHint)
-			collHadError = true
-			if !p.skipValue() {
-				return nil, false
-			}
-			continue
-		}
-
-		recBraceOff := valOff
-		if _, _, ok := p.readToken(); !ok {
-			return nil, false
-		}
-		recDepth := p.dec.StackDepth()
-		if p.dec.PeekKind() == '}' {
-			p.readToken()
-			if !collHadError {
-				elems = append(elems, Elem{Label: label, Body: Record{}})
-			}
-			continue
-		}
-
-		firstKeyTok, firstKeyOff, ok := p.readToken()
-		if !ok {
-			return nil, false
-		}
-		firstKey := firstKeyTok.String()
-		if firstKey == "$enum" || firstKey == "$qty" || firstKey == "$ref" || firstKey == "$coll" {
-			p.recordError(recBraceOff, "L305", collHint)
-			collHadError = true
-			p.skipContainerRemainder(recDepth)
-			if p.syntaxErr {
-				return nil, false
-			}
-			continue
-		}
-
-		recVal, ok := p.parseRecordMembers(firstKey, firstKeyOff)
-		if !ok {
-			collHadError = true
-		} else if !collHadError {
-			elems = append(elems, Elem{Label: label, Body: recVal})
-		}
-	}
-
-	if p.syntaxErr {
-		return nil, false
-	}
-
-	nextKind := p.dec.PeekKind()
-	if nextKind == jsontext.KindInvalid {
-		p.readToken()
-		return nil, false
-	}
-	if nextKind == '}' {
-		p.readToken()
-		if collHadError {
-			return nil, false
-		}
-		return Collection{Elems: elems}, true
-	}
-
-	_, secondKeyOff, ok := p.readToken()
-	if !ok {
-		return nil, false
-	}
-	if !collHadError {
-		p.recordError(secondKeyOff, "L305", "write a tag object with only one key")
-	}
-	p.skipContainerRemainder(depth)
-	return nil, false
-}
-
-func (p *jsonDecoder) parseRecordMembers(firstKey string, firstKeyOff int) (Record, bool) {
-	if p.syntaxErr {
-		return Record{}, false
-	}
-	seenKeys := make(map[string]bool)
-	var fields []Field
-	recordHadError := false
-
-	curKey := firstKey
-	curKeyOff := firstKeyOff
-
-	for !p.syntaxErr {
-		hasKeyError := false
-		if strings.HasPrefix(curKey, "$") {
-			hasKeyError = true
-			p.recordError(curKeyOff, "L205", "")
-		} else if seenKeys[curKey] {
-			hasKeyError = true
-			p.recordError(curKeyOff, "L201", "")
-		}
-		seenKeys[curKey] = true
-
-		if hasKeyError {
-			recordHadError = true
-			if !p.skipValue() {
-				return Record{}, false
-			}
+		if v, vok := r.convert(tok, off, depth, true); vok {
+			list = append(list, v)
+			offs = append(offs, off)
 		} else {
-			val, ok := p.parseValue()
-			if !ok {
-				recordHadError = true
-			} else {
-				fields = append(fields, Field{Key: curKey, Value: val})
+			ok = false
+		}
+	}
+	if !ok {
+		return nil, false
+	}
+	for i, v := range list {
+		if scalarType(v) != scalarType(list[0]) {
+			r.fail(offs[i], "L204", "")
+			return nil, false
+		}
+	}
+	return list, true
+}
+
+func (r *jsonReader) tag(name string, depth int) (Value, bool) {
+	stackDepth := r.dec.StackDepth()
+	tok, off, ok := r.next()
+	if !ok {
+		return nil, false
+	}
+	var (
+		v      Value
+		tagErr bool
+	)
+	switch {
+	case tok.Kind() == 'n':
+		r.fail(off, "L302", "")
+		tagErr = true
+	case name == "$coll":
+		v, tagErr = r.coll(tok, off, depth)
+	case tok.Kind() != '"':
+		r.fail(off, "L305", tagHints[name])
+		tagErr = true
+	default:
+		v, tagErr = r.scalarTag(name, tok.String(), off)
+	}
+	if tagErr {
+		r.skipTo(stackDepth - 1)
+		return nil, false
+	}
+	if tok, off, ok = r.next(); !ok {
+		return nil, false
+	}
+	if tok.Kind() != '}' {
+		r.fail(off, "L305", hintOneKey)
+		r.skipTo(stackDepth - 1)
+		return nil, false
+	}
+	if v == nil {
+		return nil, false
+	}
+	return v, true
+}
+
+func (r *jsonReader) scalarTag(name, s string, off int) (Value, bool) {
+	switch name {
+	case "$enum":
+		if isValidEnumName(s) {
+			return Enum(s), false
+		}
+	case "$qty":
+		if s != "" && (s[0] == '-' || (s[0] >= '0' && s[0] <= '9')) {
+			switch kind, code := lexValidateNumber(s); {
+			case kind == tokQuantity:
+				num, unit := splitQuantity(s)
+				return Quantity{Number: normalizeNumber(num), Unit: unit}, false
+			case code == "L005":
+				r.fail(off, "L005", "")
+				return nil, true
 			}
 		}
-
-		if p.syntaxErr {
-			return Record{}, false
+	case "$ref":
+		if ref, ok := parseRefBody(s); ok {
+			return ref, false
 		}
+	}
+	r.fail(off, "L305", tagHints[name])
+	return nil, true
+}
 
-		nextKind := p.dec.PeekKind()
-		if nextKind == jsontext.KindInvalid {
-			p.readToken()
-			return Record{}, false
+func (r *jsonReader) coll(tok jsontext.Token, off, depth int) (Value, bool) {
+	if tok.Kind() != '{' {
+		r.fail(off, "L305", tagHints["$coll"])
+		return nil, true
+	}
+	var c Collection
+	seen := map[string]bool{}
+	ok := true
+	for {
+		tok, labelOff, rok := r.next()
+		if !rok {
+			return nil, false
 		}
-		if nextKind == '}' {
-			p.readToken()
+		if tok.Kind() == '}' {
+			if len(c.Elems) == 0 && ok {
+				r.fail(off, "L305", tagHints["$coll"])
+				return nil, true
+			}
 			break
 		}
-
-		nextKeyTok, nextKeyOff, ok := p.readToken()
-		if !ok {
-			return Record{}, false
+		label := tok.String()
+		if seen[label] {
+			r.fail(labelOff, "L201", "")
+			ok = false
+			r.skipValue()
+			continue
 		}
-		curKey = nextKeyTok.String()
-		curKeyOff = nextKeyOff
+		seen[label] = true
+		tok, valOff, rok := r.next()
+		if !rok {
+			return nil, false
+		}
+		switch tok.Kind() {
+		case 'n':
+			r.fail(valOff, "L302", "")
+			ok = false
+		case '{':
+			body, bok, tagErr := r.elemRecord(valOff, depth+1)
+			if tagErr {
+				return nil, true
+			}
+			if bok {
+				c.Elems = append(c.Elems, Elem{Label: label, Body: body})
+			} else {
+				ok = false
+			}
+		default:
+			r.fail(valOff, "L305", tagHints["$coll"])
+			return nil, true
+		}
 	}
+	if !ok || len(c.Elems) == 0 {
+		return nil, false
+	}
+	return c, false
+}
 
-	if p.syntaxErr || recordHadError {
-		return Record{}, false
+func (r *jsonReader) elemRecord(off, depth int) (Record, bool, bool) {
+	tok, keyOff, ok := r.next()
+	if !ok {
+		return Record{}, false, false
 	}
-	return Record{Fields: fields}, true
+	if tok.Kind() == '}' {
+		if depth > maxBlockDepth {
+			r.fail(off, "L107", "")
+			return Record{}, false, false
+		}
+		return Record{}, true, false
+	}
+	key := tok.String()
+	if _, isTag := tagHints[key]; isTag {
+		r.fail(off, "L305", tagHints["$coll"])
+		r.skipTo(r.dec.StackDepth() - 1)
+		return Record{}, false, true
+	}
+	if depth > maxBlockDepth {
+		r.fail(off, "L107", "")
+		r.skipTo(r.dec.StackDepth() - 1)
+		return Record{}, false, false
+	}
+	rec, rok := r.members(key, keyOff, depth, false)
+	return rec, rok, false
+}
+
+func (r *jsonReader) errorList() *ErrorList {
+	sort.SliceStable(r.errs, func(i, j int) bool { return r.errs[i].off < r.errs[j].off })
+	errs := make([]*Error, len(r.errs))
+	pos, off := Pos{Line: 1, Col: 1}, 0
+	for i, e := range r.errs {
+		for off < e.off && off < len(r.src) {
+			if r.src[off] == '\n' {
+				pos.Line, pos.Col = pos.Line+1, 0
+			}
+			_, n := utf8.DecodeRune(r.src[off:])
+			off += n
+			pos.Col++
+		}
+		errs[i] = newError("", pos, e.code, e.hint)
+	}
+	return &ErrorList{Errors: sortErrors(errs)}
 }

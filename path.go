@@ -15,38 +15,37 @@ func (f *File) Get(path string) (Value, error) {
 	lastSeg := segs[len(segs)-1]
 	parent, failSeg, ok := resolveParent(f, segs[:len(segs)-1], lastSeg)
 	if !ok {
-		return nil, pathError(f.name, "L402", "check the path at segment "+quoteString(failSeg))
+		return nil, notFoundError(f.name, failSeg)
 	}
 
 	if parent.kind == parentCollection {
-		for _, e := range parent.collBlock.entries {
+		for _, e := range parent.block.entries {
 			if e.key == parent.collKey && e.label == lastSeg {
 				return buildRecord(e.body), nil
 			}
 		}
-		return nil, pathError(f.name, "L402", "check the path at segment "+quoteString(lastSeg))
+		return nil, notFoundError(f.name, lastSeg)
 	}
 
-	firstIdx, lastIdx := keyRange(parent.recordBlock, lastSeg)
+	firstIdx, lastIdx := keyRange(parent.block, lastSeg)
 	if firstIdx == -1 {
-		return nil, pathError(f.name, "L402", "check the path at segment "+quoteString(lastSeg))
+		return nil, notFoundError(f.name, lastSeg)
 	}
 
-	first := parent.recordBlock.entries[firstIdx]
+	first := parent.block.entries[firstIdx]
 	switch first.kind {
 	case entryAssign:
 		return buildValue(first.value), nil
 	case entryRecord:
 		return buildRecord(first.body), nil
-	case entryElem:
-		matching := parent.recordBlock.entries[firstIdx : lastIdx+1]
+	default:
+		matching := parent.block.entries[firstIdx : lastIdx+1]
 		elems := make([]Elem, len(matching))
 		for i, e := range matching {
 			elems[i] = Elem{Label: e.label, Body: buildRecord(e.body)}
 		}
 		return Collection{Elems: elems}, nil
 	}
-	return nil, nil
 }
 
 func (f *File) Set(path string, v Value) error {
@@ -58,7 +57,7 @@ func (f *File) Set(path string, v Value) error {
 	lastSeg := segs[len(segs)-1]
 	parent, failSeg, ok := resolveParent(f, segs[:len(segs)-1], lastSeg)
 	if !ok {
-		return pathError(f.name, "L402", "check the path at segment "+quoteString(failSeg))
+		return notFoundError(f.name, failSeg)
 	}
 
 	if parent.kind == parentCollection {
@@ -69,11 +68,14 @@ func (f *File) Set(path string, v Value) error {
 		if hint := validateValue(recVal); hint != "" {
 			return pathError(f.name, "L403", hint)
 		}
+		if parent.depth+recordDepth(recVal) > maxBlockDepth {
+			return pathError(f.name, "L403", "nest blocks at most 1000 levels deep")
+		}
 		vNorm := normalizeValue(recVal).(Record)
 
 		var existingElem *entry
 		lastCollIdx := -1
-		for idx, e := range parent.collBlock.entries {
+		for idx, e := range parent.block.entries {
 			if e.key == parent.collKey {
 				lastCollIdx = idx
 				if e.label == lastSeg {
@@ -84,7 +86,7 @@ func (f *File) Set(path string, v Value) error {
 
 		if existingElem != nil {
 			oldBodyOneLine := false
-			if existingElem.body != nil && (len(existingElem.body.entries) > 0 || len(existingElem.body.trailing) > 0) {
+			if len(existingElem.body.entries) > 0 || len(existingElem.body.trailing) > 0 {
 				oldBodyOneLine = existingElem.body.oneLine
 			}
 			newBody := blockFromRecord(vNorm)
@@ -97,7 +99,7 @@ func (f *File) Set(path string, v Value) error {
 				label: lastSeg,
 				body:  blockFromRecord(vNorm),
 			}
-			parent.collBlock.entries = slices.Insert(parent.collBlock.entries, lastCollIdx+1, newElem)
+			parent.block.entries = slices.Insert(parent.block.entries, lastCollIdx+1, newElem)
 		}
 		return nil
 	}
@@ -109,13 +111,16 @@ func (f *File) Set(path string, v Value) error {
 	if hint := validateValue(v); hint != "" {
 		return pathError(f.name, "L403", hint)
 	}
+	if parent.depth+recordDepth(v) > maxBlockDepth {
+		return pathError(f.name, "L403", "nest blocks at most 1000 levels deep")
+	}
 
 	vNorm := normalizeValue(v)
 
-	firstIdx, lastIdx := keyRange(parent.recordBlock, lastSeg)
+	firstIdx, lastIdx := keyRange(parent.block, lastSeg)
 	var oldEnt *entry
 	if firstIdx != -1 {
-		oldEnt = parent.recordBlock.entries[firstIdx]
+		oldEnt = parent.block.entries[firstIdx]
 	}
 
 	var newEntries []*entry
@@ -131,7 +136,7 @@ func (f *File) Set(path string, v Value) error {
 		}
 	case Record:
 		b := blockFromRecord(val)
-		if oldEnt != nil && oldEnt.kind == entryRecord && oldEnt.body != nil &&
+		if oldEnt != nil && oldEnt.kind == entryRecord &&
 			(len(oldEnt.body.entries) > 0 || len(oldEnt.body.trailing) > 0) {
 			b.oneLine = oldEnt.body.oneLine
 		}
@@ -159,12 +164,12 @@ func (f *File) Set(path string, v Value) error {
 	if oldEnt != nil {
 		newEntries[0].comments = oldEnt.comments
 		newEntries[0].blankBefore = oldEnt.blankBefore
-		parent.recordBlock.entries = slices.Replace(parent.recordBlock.entries, firstIdx, lastIdx+1, newEntries...)
+		parent.block.entries = slices.Replace(parent.block.entries, firstIdx, lastIdx+1, newEntries...)
 	} else {
-		if len(parent.recordBlock.entries) == 0 && len(parent.recordBlock.trailing) == 0 {
-			parent.recordBlock.oneLine = false
+		if len(parent.block.entries) == 0 && len(parent.block.trailing) == 0 {
+			parent.block.oneLine = false
 		}
-		parent.recordBlock.entries = append(parent.recordBlock.entries, newEntries...)
+		parent.block.entries = append(parent.block.entries, newEntries...)
 	}
 	return nil
 }
@@ -178,24 +183,24 @@ func (f *File) Delete(path string) error {
 	lastSeg := segs[len(segs)-1]
 	parent, failSeg, ok := resolveParent(f, segs[:len(segs)-1], lastSeg)
 	if !ok {
-		return pathError(f.name, "L402", "check the path at segment "+quoteString(failSeg))
+		return notFoundError(f.name, failSeg)
 	}
 
 	if parent.kind == parentCollection {
-		for idx, e := range parent.collBlock.entries {
+		for idx, e := range parent.block.entries {
 			if e.key == parent.collKey && e.label == lastSeg {
-				removeEntries(parent.collBlock, idx, idx)
+				removeEntries(parent.block, idx, idx)
 				return nil
 			}
 		}
-		return pathError(f.name, "L402", "check the path at segment "+quoteString(lastSeg))
+		return notFoundError(f.name, lastSeg)
 	}
 
-	firstIdx, lastIdx := keyRange(parent.recordBlock, lastSeg)
+	firstIdx, lastIdx := keyRange(parent.block, lastSeg)
 	if firstIdx == -1 {
-		return pathError(f.name, "L402", "check the path at segment "+quoteString(lastSeg))
+		return notFoundError(f.name, lastSeg)
 	}
-	removeEntries(parent.recordBlock, firstIdx, lastIdx)
+	removeEntries(parent.block, firstIdx, lastIdx)
 	return nil
 }
 
@@ -242,30 +247,30 @@ func ParseValue(src []byte) (Value, error) {
 		pos++
 	}
 
-	if pos >= len(tokens) || tokens[pos].kind == tokEOF {
-		eofPos := Pos{Line: 1, Col: 1}
-		if pos < len(tokens) {
-			eofPos = tokens[pos].pos
-		}
-		errs := append(lexErrs, newError("", eofPos, "L106", "write a value: string, number, quantity, boolean, enum, reference, list or \\ lines"))
+	if tokens[pos].kind == tokEOF {
+		errs := append(lexErrs, newError("", tokens[pos].pos, "L106", "write a value: string, number, quantity, boolean, enum, reference, list or \\ lines"))
 		return nil, &ErrorList{Errors: sortErrors(errs)}
 	}
 
 	p := &parser{
-		file:   "",
 		tokens: tokens,
 		pos:    pos,
 	}
 
-	var val Value
-	if tokens[pos].kind == tokString && pos+1 < len(tokens) && tokens[pos+1].kind == tokLBrace {
+	var (
+		val Value
+		ok  bool
+	)
+	if tokens[pos].kind == tokString && tokens[pos+1].kind == tokLBrace {
 		var elems []Elem
 		seenLabels := make(map[string]bool)
+		ok = true
 
 		for {
 			labelTok := p.next()
-			body, ok := p.parseBracedBlock()
-			if !ok {
+			body, blockOK := p.parseBracedBlock()
+			if !blockOK {
+				ok = false
 				break
 			}
 			if seenLabels[labelTok.text] {
@@ -289,6 +294,7 @@ func ParseValue(src []byte) (Value, error) {
 			if p.peek().kind == tokString && p.peekNext().kind == tokLBrace {
 				if !hasSep {
 					p.syntaxError(p.peek(), "L106", "separate entries with a newline or a comma")
+					ok = false
 					break
 				}
 				continue
@@ -297,13 +303,15 @@ func ParseValue(src []byte) (Value, error) {
 		}
 		val = Collection{Elems: elems}
 	} else if tokens[pos].kind == tokLBrace {
-		body, ok := p.parseBracedBlock()
+		var body *block
+		body, ok = p.parseBracedBlock()
 		if ok {
 			p.errors = append(p.errors, validate("", body)...)
 			val = buildRecord(body)
 		}
 	} else {
-		node, ok := p.parseAssignValue()
+		var node node
+		node, ok = p.parseAssignValue()
 		if ok {
 			p.errors = append(p.errors, validate("", &block{entries: []*entry{{value: node}}})...)
 			val = buildValue(node)
@@ -313,7 +321,7 @@ func ParseValue(src []byte) (Value, error) {
 	for p.peek().kind == tokNewline || p.peek().kind == tokComment {
 		p.next()
 	}
-	if p.peek().kind != tokEOF && len(p.errors) == 0 {
+	if ok && p.peek().kind != tokEOF {
 		p.syntaxError(p.peek(), "L106", "write a value: string, number, quantity, boolean, enum, reference, list or \\ lines")
 	}
 
@@ -328,6 +336,10 @@ func pathError(fileName, code, hint string) error {
 	return &ErrorList{Errors: []*Error{newError(fileName, Pos{}, code, hint)}}
 }
 
+func notFoundError(file, seg string) error {
+	return pathError(file, "L402", "check the path at segment "+quoteString(seg))
+}
+
 type parentType int
 
 const (
@@ -336,23 +348,22 @@ const (
 )
 
 type parentTarget struct {
-	kind        parentType
-	recordBlock *block
-	collBlock   *block
-	collKey     string
+	kind    parentType
+	block   *block
+	collKey string
+	depth   int
 }
 
 func resolveParent(f *File, parentSegs []string, lastSeg string) (parentTarget, string, bool) {
-	target := parentTarget{kind: parentRecord, recordBlock: f.body}
-	for i := 0; i < len(parentSegs); i++ {
-		seg := parentSegs[i]
+	target := parentTarget{kind: parentRecord, block: f.body, depth: 0}
+	for i, seg := range parentSegs {
 		switch target.kind {
 		case parentRecord:
-			firstIdx, _ := keyRange(target.recordBlock, seg)
+			firstIdx, _ := keyRange(target.block, seg)
 			if firstIdx == -1 {
 				return parentTarget{}, seg, false
 			}
-			first := target.recordBlock.entries[firstIdx]
+			first := target.block.entries[firstIdx]
 			switch first.kind {
 			case entryAssign:
 				if i < len(parentSegs)-1 {
@@ -360,13 +371,13 @@ func resolveParent(f *File, parentSegs []string, lastSeg string) (parentTarget, 
 				}
 				return parentTarget{}, lastSeg, false
 			case entryRecord:
-				target = parentTarget{kind: parentRecord, recordBlock: first.body}
+				target = parentTarget{kind: parentRecord, block: first.body, depth: target.depth + 1}
 			case entryElem:
-				target = parentTarget{kind: parentCollection, collBlock: target.recordBlock, collKey: seg}
+				target = parentTarget{kind: parentCollection, block: target.block, collKey: seg, depth: target.depth}
 			}
 		case parentCollection:
 			var elemEnt *entry
-			for _, e := range target.collBlock.entries {
+			for _, e := range target.block.entries {
 				if e.key == target.collKey && e.label == seg {
 					elemEnt = e
 					break
@@ -375,10 +386,74 @@ func resolveParent(f *File, parentSegs []string, lastSeg string) (parentTarget, 
 			if elemEnt == nil {
 				return parentTarget{}, seg, false
 			}
-			target = parentTarget{kind: parentRecord, recordBlock: elemEnt.body}
+			target = parentTarget{kind: parentRecord, block: elemEnt.body, depth: target.depth + 1}
 		}
 	}
 	return target, "", true
+}
+
+func scanNumber(s string) (int, bool, bool) {
+	if strings.HasPrefix(s, "-") {
+		s = s[1:]
+	}
+	if len(s) == 0 {
+		return 0, false, false
+	}
+	intDigits := 0
+	if s[0] == '0' {
+		intDigits = 1
+		s = s[1:]
+		if len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
+			return 0, false, false
+		}
+	} else if s[0] >= '1' && s[0] <= '9' {
+		for len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
+			intDigits++
+			s = s[1:]
+		}
+	} else {
+		return 0, false, false
+	}
+	hasFrac := false
+	fracDigits := 0
+	if strings.HasPrefix(s, ".") {
+		hasFrac = true
+		s = s[1:]
+		for len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
+			fracDigits++
+			s = s[1:]
+		}
+		if fracDigits == 0 {
+			return 0, false, false
+		}
+	}
+	if len(s) > 0 {
+		return 0, false, false
+	}
+	return intDigits + fracDigits, hasFrac, true
+}
+
+func recordDepth(v Value) int {
+	switch val := v.(type) {
+	case Record:
+		maxChild := 0
+		for _, f := range val.Fields {
+			if d := recordDepth(f.Value); d > maxChild {
+				maxChild = d
+			}
+		}
+		return 1 + maxChild
+	case Collection:
+		maxChild := 0
+		for _, el := range val.Elems {
+			if d := recordDepth(el.Body); d > maxChild {
+				maxChild = d
+			}
+		}
+		return maxChild
+	default:
+		return 0
+	}
 }
 
 func validateValue(v Value) string {
@@ -390,40 +465,27 @@ func validateValue(v Value) string {
 		if !utf8.ValidString(string(val)) {
 			return "use valid UTF-8 text"
 		}
-	case Int:
 	case Decimal:
-		s := string(val)
-		if len(s) == 0 || (s[0] != '-' && (s[0] < '0' || s[0] > '9')) {
+		digits, hasFrac, ok := scanNumber(string(val))
+		if !ok || !hasFrac {
 			return "write a decimal such as 0.25"
 		}
-		kind, errCode := lexValidateNumber(s)
-		if errCode == "L005" {
+		if digits > 100 {
 			return "keep numbers within 100 digits"
-		}
-		if kind != tokDecimal || errCode != "" {
-			return "write a decimal such as 0.25"
 		}
 	case Quantity:
-		if len(val.Number) == 0 || (val.Number[0] != '-' && (val.Number[0] < '0' || val.Number[0] > '9')) {
+		digits, _, ok := scanNumber(val.Number)
+		if !ok || len(val.Unit) == 0 {
 			return "write a quantity such as 512Mi"
 		}
-		kind, errCode := lexValidateNumber(val.Number)
-		if errCode == "L005" {
-			return "keep numbers within 100 digits"
-		}
-		if (kind != tokInt && kind != tokDecimal) || errCode != "" {
-			return "write a quantity such as 512Mi"
-		}
-		if len(val.Unit) == 0 {
-			return "write a quantity such as 512Mi"
-		}
-		for i := 0; i < len(val.Unit); i++ {
-			c := val.Unit[i]
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+		for _, r := range val.Unit {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
 				return "write a quantity such as 512Mi"
 			}
 		}
-	case Bool:
+		if digits > 100 {
+			return "keep numbers within 100 digits"
+		}
 	case Enum:
 		s := string(val)
 		if !utf8.ValidString(s) {
@@ -443,9 +505,6 @@ func validateValue(v Value) string {
 		}
 	case List:
 		for _, el := range val {
-			if el == nil {
-				return "use a non-nil value"
-			}
 			switch el.(type) {
 			case List, Record, Collection:
 				return "use only scalars as list elements"
@@ -475,9 +534,8 @@ func validateValue(v Value) string {
 				return "remove the duplicate key"
 			}
 			seenKeys[f.Key] = true
-			if f.Value == nil {
-				return "use a non-nil value"
-			}
+		}
+		for _, f := range val.Fields {
 			if hint := validateValue(f.Value); hint != "" {
 				return hint
 			}
@@ -495,6 +553,8 @@ func validateValue(v Value) string {
 				return "remove the duplicate label"
 			}
 			seenLabels[el.Label] = true
+		}
+		for _, el := range val.Elems {
 			if hint := validateValue(el.Body); hint != "" {
 				return hint
 			}

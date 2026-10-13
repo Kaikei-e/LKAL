@@ -59,6 +59,8 @@ func (l *ErrorList) Error() string {
 	return b.String()
 }
 
+const maxBlockDepth = 1000
+
 var errorMessages = map[string]string{
 	"L001": "comment starts with # or ##",
 	"L002": "comment at the end of a line or inside a list",
@@ -75,6 +77,7 @@ var errorMessages = map[string]string{
 	"L104": "blank line or comment inside a multi-line string",
 	"L105": "missing, misplaced or repeated version declaration",
 	"L106": "unexpected token",
+	"L107": "blocks nested too deeply",
 	"L201": "duplicate key or label",
 	"L202": "key used for more than one kind of entry",
 	"L203": "collection elements are not contiguous",
@@ -108,6 +111,7 @@ var errorHints = map[string]string{
 	"L104": `remove the gap; write an empty line as a lone \\`,
 	"L105": `write @lkal "0.1" once, at the top`,
 	"L106": `start an entry with key = value, key { ... } or key "label" { ... }`,
+	"L107": "nest blocks at most 1000 levels deep",
 	"L201": "remove one of them",
 	"L202": "use the key for one kind only: assignment, record or collection",
 	"L203": "write the elements next to each other",

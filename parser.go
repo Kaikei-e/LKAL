@@ -41,6 +41,7 @@ type parser struct {
 	pos      int
 	errors   []*Error
 	brackets []token
+	depth    int
 }
 
 func (p *parser) peek() token {
@@ -100,6 +101,7 @@ func (p *parser) recover() {
 		}
 	}
 	p.brackets = nil
+	p.depth = 0
 }
 
 type bodyState struct {
@@ -235,6 +237,12 @@ func (p *parser) parseFileBody() *block {
 }
 
 func (p *parser) parseBracedBlock() (*block, bool) {
+	if p.depth >= maxBlockDepth {
+		p.syntaxError(p.peek(), "L107", "")
+		return nil, false
+	}
+	p.depth++
+
 	lbraceTok := p.next()
 	p.track(lbraceTok)
 	var entries []*entry
@@ -252,6 +260,7 @@ func (p *parser) parseBracedBlock() (*block, bool) {
 		s.blank = false
 
 		if !ok {
+			p.depth--
 			return nil, false
 		}
 		entries = append(entries, ent)
@@ -260,6 +269,7 @@ func (p *parser) parseBracedBlock() (*block, bool) {
 
 	rbraceTok := p.next()
 	p.track(rbraceTok)
+	p.depth--
 	return &block{
 		entries:  entries,
 		trailing: s.comments,

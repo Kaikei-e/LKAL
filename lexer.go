@@ -243,7 +243,7 @@ func lexCommentText(rawAfterHashes string) string {
 }
 
 func isControlChar(r rune) bool {
-	return (r >= 0 && r < 0x20 && r != '\t') || r == 0x7f
+	return (r < 0x20 && r != '\t') || r == 0x7f
 }
 
 func lexCheckCommentOrRawInvalidChars(file string, lineNum int, cols []int, line []byte, off int) []*Error {
