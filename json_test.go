@@ -720,6 +720,7 @@ func TestFromJSONErrors(t *testing.T) {
 		name        string
 		input       string
 		wantErrors  []string
+		wantHint    string
 		wantCount20 bool
 	}{
 		{
@@ -1287,21 +1288,42 @@ func TestFromJSONErrors(t *testing.T) {
 			input:      `{"$lkal":"0.1","c":{"$coll":{"x":{"k":null}},"y":1}}`,
 			wantErrors: []string{"L302 1:39", "L305 1:46"},
 		},
+		{
+			name:       "amendment5_max_depth_key_syntax_error",
+			input:      `{"$lkal":"0.1","max depth":tru}`,
+			wantErrors: []string{"L301 1:31"},
+			wantHint:   "fix the JSON syntax",
+		},
+		{
+			name:       "amendment5_coll_member_error_null",
+			input:      `{"$lkal":"0.1","c":{"$coll":{"a":1,"b":{"k":null}}}}`,
+			wantErrors: []string{"L305 1:34", "L302 1:45"},
+		},
+		{
+			name:       "amendment5_coll_member_error_duplicate_label",
+			input:      `{"$lkal":"0.1","c":{"$coll":{"a":1,"a":{}}}}`,
+			wantErrors: []string{"L305 1:34", "L201 1:36"},
+		},
+		{
+			name:       "amendment5_coll_member_error_dollar_key",
+			input:      `{"$lkal":"0.1","c":{"$coll":{"a":{"$enum":"x"},"b":{"$k":1}}}}`,
+			wantErrors: []string{"L305 1:34", "L205 1:53"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, err := FromJSON([]byte(tt.input))
 			if err == nil {
-				t.Fatalf("expected error from FromJSON, got nil error, file: %v", f)
+				t.Fatalf("expected error from FromJSON: got nil, want error, file: %v", f)
 			}
 			if f != nil {
-				t.Errorf("expected nil File on error, got: %v", f)
+				t.Errorf("expected nil File on error: got %v, want nil", f)
 			}
 
 			errList, ok := err.(*ErrorList)
 			if !ok {
-				t.Fatalf("expected *ErrorList, got %T: %v", err, err)
+				t.Fatalf("expected *ErrorList: got %T (%v), want *ErrorList", err, err)
 			}
 
 			got := jsonTExtractErrors(errList)
@@ -1321,6 +1343,63 @@ func TestFromJSONErrors(t *testing.T) {
 				if !reflect.DeepEqual(got, tt.wantErrors) {
 					t.Errorf("error mismatch:\ngot:  %v\nwant: %v", got, tt.wantErrors)
 				}
+			}
+			if tt.wantHint != "" {
+				if errList == nil || len(errList.Errors) == 0 {
+					t.Fatalf("expected at least 1 error for hint check: got 0, want >= 1")
+				}
+				first := errList.Errors[0]
+				if first == nil {
+					t.Fatalf("first error is nil: got nil, want non-nil Error")
+				}
+				if gotHint, wantHint := first.Hint, tt.wantHint; gotHint != wantHint {
+					t.Errorf("hint mismatch: got %q, want %q", gotHint, wantHint)
+				}
+			}
+		})
+	}
+}
+
+func TestFromJSONMaxDepthKeySyntaxErrorHint(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantCode string
+		wantHint string
+	}{
+		{
+			name:     "key_containing_max_depth_keeps_default_syntax_hint",
+			input:    `{"$lkal":"0.1","max depth":tru}`,
+			wantCode: "L301",
+			wantHint: "fix the JSON syntax",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := FromJSON([]byte(tt.input))
+			if err == nil {
+				t.Fatalf("FromJSON(%q) error: got nil, want non-nil error, file: %v", tt.input, f)
+			}
+			if f != nil {
+				t.Errorf("FromJSON(%q) file: got %v, want nil", tt.input, f)
+			}
+			errList, ok := err.(*ErrorList)
+			if !ok {
+				t.Fatalf("FromJSON(%q) error type: got %T (%v), want *ErrorList", tt.input, err, err)
+			}
+			if errList == nil || len(errList.Errors) == 0 {
+				t.Fatalf("FromJSON(%q) error count: got 0, want >= 1", tt.input)
+			}
+			first := errList.Errors[0]
+			if first == nil {
+				t.Fatalf("FromJSON(%q) first error is nil: got nil, want non-nil Error", tt.input)
+			}
+			if gotCode, wantCode := first.Code, tt.wantCode; gotCode != wantCode {
+				t.Errorf("Code mismatch: got %q, want %q", gotCode, wantCode)
+			}
+			if gotHint, wantHint := first.Hint, tt.wantHint; gotHint != wantHint {
+				t.Errorf("Hint mismatch: got %q, want %q", gotHint, wantHint)
 			}
 		})
 	}

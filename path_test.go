@@ -2743,6 +2743,59 @@ func TestSetDepth(t *testing.T) {
 	}
 }
 
+func TestSetDepthOrder(t *testing.T) {
+	deep := Record{}
+	for i := 0; i < 1000; i++ {
+		deep = Record{Fields: []Field{{"x", deep}}}
+	}
+
+	tests := []struct {
+		name     string
+		value    Value
+		wantHint string
+	}{
+		{
+			name:     "deep_record_first_exceeds_depth_limit",
+			value:    Record{Fields: []Field{{"a", deep}, {"b", Decimal("1.")}}},
+			wantHint: "nest blocks at most 1000 levels deep",
+		},
+		{
+			name:     "invalid_decimal_first_fails_decimal_validation",
+			value:    Record{Fields: []Field{{"b", Decimal("1.")}, {"a", deep}}},
+			wantHint: "write a decimal such as 0.25",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := pathTParse(t, "test.lkal", "@lkal \"0.1\"\n")
+			if f == nil {
+				t.Fatalf("pathTParse returned nil File: got nil, want non-nil")
+			}
+			origFmtBytes := f.Format()
+			if origFmtBytes == nil {
+				t.Fatalf("Format() returned nil: got nil, want non-nil")
+			}
+			origFmt := string(origFmtBytes)
+
+			err := f.Set("r", tc.value)
+			if err == nil {
+				t.Fatalf("Set(%q) error: got nil, want error", "r")
+			}
+			pathTCheckSingleError(t, err, "test.lkal", "L403", "invalid value", tc.wantHint)
+
+			postFmtBytes := f.Format()
+			if postFmtBytes == nil {
+				t.Fatalf("Format() returned nil after failed Set: got nil, want non-nil")
+			}
+			postFmt := string(postFmtBytes)
+			if postFmt != origFmt {
+				t.Errorf("File changed after failed Set:\ngot:\n%s\nwant:\n%s", postFmt, origFmt)
+			}
+		})
+	}
+}
+
 func TestParseValueImplementationReview(t *testing.T) {
 	deepSrc1001 := "{ " + strings.Repeat("a { ", 1000) + "x = 1" + strings.Repeat(" }", 1001)
 	col1001 := strings.LastIndex(deepSrc1001, "{") + 1
@@ -2792,6 +2845,19 @@ func TestParseValueImplementationReview(t *testing.T) {
 					col:  14,
 					msg:  "unexpected token",
 					hint: "write a value: string, number, quantity, boolean, enum, reference, list or \\ lines",
+				},
+			},
+		},
+		{
+			name: "list_syntax_error_no_extra_token_l106",
+			src:  "[\n### c\n1] x",
+			wantErrors: []pathTExpectedError{
+				{
+					code: "L002",
+					line: 2,
+					col:  1,
+					msg:  "comment at the end of a line or inside a list",
+					hint: "move the comment to its own line outside the list",
 				},
 			},
 		},
