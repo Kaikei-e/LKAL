@@ -1022,3 +1022,64 @@ func FuzzFormat(f *testing.F) {
 		}
 	})
 }
+
+func TestFormatDeepNesting(t *testing.T) {
+	type nestTFormatCase struct {
+		name string
+		src  string
+	}
+
+	tests := []nestTFormatCase{
+		{
+			name: "1000_nested_records",
+			src:  "@lkal \"0.1\"\n" + strings.Repeat("a { ", 1000) + "x = 1" + strings.Repeat(" }", 1000) + "\n",
+		},
+		{
+			name: "1000_nested_elements",
+			src:  "@lkal \"0.1\"\n" + strings.Repeat("a \"l\" { ", 1000) + "x = 1" + strings.Repeat(" }", 1000) + "\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fOrig, err := Parse("", []byte(tc.src))
+			if err != nil {
+				t.Fatalf("Parse(%q) original failed: got error %v, want nil", tc.name, err)
+			}
+			if fOrig == nil {
+				t.Fatalf("Parse(%q) original returned nil File: got nil, want non-nil *File", tc.name)
+			}
+
+			out, err := Format([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("Format(%q) failed: got error %v, want nil", tc.name, err)
+			}
+			if out == nil {
+				t.Fatalf("Format(%q) returned nil bytes: got nil, want non-nil []byte", tc.name)
+			}
+
+			out2, err := Format(out)
+			if err != nil {
+				t.Fatalf("Format(Format(%q)) failed: got error %v, want nil", tc.name, err)
+			}
+			if out2 == nil {
+				t.Fatalf("Format(Format(%q)) returned nil bytes: got nil, want non-nil []byte", tc.name)
+			}
+			if !bytes.Equal(out, out2) {
+				t.Fatalf("Format(%q) not idempotent: got Format(Format(x)) != Format(x), want equal bytes", tc.name)
+			}
+
+			fFmt, err := Parse("", out)
+			if err != nil {
+				t.Fatalf("Parse(%q) formatted failed: got error %v, want nil", tc.name, err)
+			}
+			if fFmt == nil {
+				t.Fatalf("Parse(%q) formatted returned nil File: got nil, want non-nil *File", tc.name)
+			}
+
+			if !Equal(fFmt.Data(), fOrig.Data()) {
+				t.Fatalf("Parse(%q, out).Data() mismatch: got %v, want %v", tc.name, fFmt.Data(), fOrig.Data())
+			}
+		})
+	}
+}

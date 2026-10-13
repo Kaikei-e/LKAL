@@ -2352,3 +2352,488 @@ func TestPathEmptySegmentMissing(t *testing.T) {
 		}
 	})
 }
+
+type pathTExpectedError struct {
+	code string
+	line int
+	col  int
+	msg  string
+	hint string
+}
+
+func pathTCheckSingleError(t *testing.T, err error, wantFile, wantCode, wantMsg, wantHint string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("error is nil, want %s error", wantCode)
+	}
+	errList, ok := err.(*ErrorList)
+	if !ok {
+		t.Fatalf("error type:\ngot:  %T (%v)\nwant: *ErrorList", err, err)
+	}
+	if len(errList.Errors) != 1 {
+		t.Fatalf("error count:\ngot:  %d (%v)\nwant: 1", len(errList.Errors), errList)
+	}
+	e := errList.Errors[0]
+	if e == nil {
+		t.Fatalf("errList.Errors[0] is nil")
+	}
+	if e.Code != wantCode {
+		t.Errorf("Code:\ngot:  %q\nwant: %q", e.Code, wantCode)
+	}
+	if e.Pos != (Pos{}) {
+		t.Errorf("Pos:\ngot:  %v\nwant: zero Pos", e.Pos)
+	}
+	if e.File != wantFile {
+		t.Errorf("File:\ngot:  %q\nwant: %q", e.File, wantFile)
+	}
+	if wantMsg != "" && e.Msg != wantMsg {
+		t.Errorf("Msg:\ngot:  %q\nwant: %q", e.Msg, wantMsg)
+	}
+	if wantHint != "" && e.Hint != wantHint {
+		t.Errorf("Hint:\ngot:  %q\nwant: %q", e.Hint, wantHint)
+	}
+}
+
+func pathTCheckErrors(t *testing.T, err error, wantErrors []pathTExpectedError) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("error is nil, want error")
+	}
+	errList, ok := err.(*ErrorList)
+	if !ok {
+		t.Fatalf("error type:\ngot:  %T (%v)\nwant: *ErrorList", err, err)
+	}
+	if len(errList.Errors) != len(wantErrors) {
+		t.Fatalf("error count:\ngot:  %d (%v)\nwant: %d", len(errList.Errors), errList, len(wantErrors))
+	}
+	for i, want := range wantErrors {
+		e := errList.Errors[i]
+		if e == nil {
+			t.Fatalf("errList.Errors[%d] is nil", i)
+		}
+		if e.File != "" {
+			t.Errorf("errList.Errors[%d].File:\ngot:  %q\nwant: %q", i, e.File, "")
+		}
+		if e.Code != want.code {
+			t.Errorf("errList.Errors[%d].Code:\ngot:  %q\nwant: %q", i, e.Code, want.code)
+		}
+		if e.Pos.Line != want.line || e.Pos.Col != want.col {
+			t.Errorf("errList.Errors[%d].Pos:\ngot:  %v\nwant: %d:%d", i, e.Pos, want.line, want.col)
+		}
+		if want.msg != "" && e.Msg != want.msg {
+			t.Errorf("errList.Errors[%d].Msg:\ngot:  %q\nwant: %q", i, e.Msg, want.msg)
+		}
+		if want.hint != "" && e.Hint != want.hint {
+			t.Errorf("errList.Errors[%d].Hint:\ngot:  %q\nwant: %q", i, e.Hint, want.hint)
+		}
+	}
+}
+
+func TestSetNumberChecks(t *testing.T) {
+	t.Run("positive", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			src        string
+			path       string
+			value      Value
+			wantFormat string
+			wantGet    Value
+		}{
+			{
+				name:       "quantity_large_integer_no_int64_limit",
+				src:        "@lkal \"0.1\"\n",
+				path:       "q",
+				value:      Quantity{Number: "99999999999999999999", Unit: "Mi"},
+				wantFormat: "@lkal \"0.1\"\n\nq = 99999999999999999999Mi\n",
+				wantGet:    Quantity{Number: "99999999999999999999", Unit: "Mi"},
+			},
+			{
+				name:       "quantity_negative_overflow_int64",
+				src:        "@lkal \"0.1\"\n",
+				path:       "q",
+				value:      Quantity{Number: "-9223372036854775809", Unit: "Gi"},
+				wantFormat: "@lkal \"0.1\"\n\nq = -9223372036854775809Gi\n",
+				wantGet:    Quantity{Number: "-9223372036854775809", Unit: "Gi"},
+			},
+			{
+				name: "list_of_quantities_overflow_int64",
+				src:  "@lkal \"0.1\"\n",
+				path: "q",
+				value: List{
+					Quantity{Number: "-9223372036854775809", Unit: "Gi"},
+					Quantity{Number: "-9223372036854775810", Unit: "Gi"},
+				},
+				wantFormat: "@lkal \"0.1\"\n\nq = [-9223372036854775809Gi, -9223372036854775810Gi]\n",
+				wantGet: List{
+					Quantity{Number: "-9223372036854775809", Unit: "Gi"},
+					Quantity{Number: "-9223372036854775810", Unit: "Gi"},
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				f := pathTParse(t, "test.lkal", tc.src)
+				err := f.Set(tc.path, tc.value)
+				if err != nil {
+					t.Fatalf("Set(%q, %#v) unexpected error: %v", tc.path, tc.value, err)
+				}
+				fmtBytes := f.Format()
+				if fmtBytes == nil {
+					t.Fatalf("Format() returned nil, want non-nil")
+				}
+				gotFmt := string(fmtBytes)
+				if gotFmt != tc.wantFormat {
+					t.Errorf("Format() mismatch:\ngot:\n%s\nwant:\n%s", gotFmt, tc.wantFormat)
+				}
+				parsed := pathTParse(t, "", gotFmt)
+				pathTCheckEqualAndOrder(t, f.Data(), parsed.Data())
+
+				gotVal, getErr := f.Get(tc.path)
+				if getErr != nil {
+					t.Fatalf("Get(%q) unexpected error: %v", tc.path, getErr)
+				}
+				if gotVal == nil {
+					t.Fatalf("Get(%q) returned nil Value", tc.path)
+				}
+				pathTCheckEqualAndOrder(t, gotVal, tc.wantGet)
+			})
+		}
+
+		t.Run("quantity_parsed_from_text_then_set_get_roundtrip", func(t *testing.T) {
+			const parsedSrc = "@lkal \"0.1\"\n\nq = 99999999999999999999Mi\n"
+			f := pathTParse(t, "test.lkal", parsedSrc)
+			origFmtBytes := f.Format()
+			if origFmtBytes == nil {
+				t.Fatalf("Format() returned nil, want non-nil")
+			}
+			origFmt := string(origFmtBytes)
+
+			gotVal, getErr := f.Get("q")
+			if getErr != nil {
+				t.Fatalf("Get(%q) unexpected error: %v", "q", getErr)
+			}
+			if gotVal == nil {
+				t.Fatalf("Get(%q) returned nil Value", "q")
+			}
+			wantVal := Quantity{Number: "99999999999999999999", Unit: "Mi"}
+			pathTCheckEqualAndOrder(t, gotVal, wantVal)
+
+			err := f.Set("q", gotVal)
+			if err != nil {
+				t.Fatalf("Set(%q, Get(%q)) unexpected error: %v", "q", "q", err)
+			}
+			newFmtBytes := f.Format()
+			if newFmtBytes == nil {
+				t.Fatalf("Format() after Set returned nil, want non-nil")
+			}
+			newFmt := string(newFmtBytes)
+			if newFmt != origFmt {
+				t.Errorf("Format() mismatch:\ngot:\n%s\nwant:\n%s", newFmt, origFmt)
+			}
+			parsed := pathTParse(t, "", newFmt)
+			pathTCheckEqualAndOrder(t, f.Data(), parsed.Data())
+		})
+	})
+
+	t.Run("negative_hints", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			path     string
+			value    Value
+			wantCode string
+			wantMsg  string
+			wantHint string
+		}{
+			{
+				name:     "decimal_101_digits_without_point",
+				path:     "dec",
+				value:    Decimal(strings.Repeat("1", 101)),
+				wantCode: "L403",
+				wantMsg:  "invalid value",
+				wantHint: "write a decimal such as 0.25",
+			},
+			{
+				name:     "quantity_101_digits_with_invalid_char",
+				path:     "qty",
+				value:    Quantity{Number: strings.Repeat("1", 101) + "x", Unit: "Mi"},
+				wantCode: "L403",
+				wantMsg:  "invalid value",
+				wantHint: "write a quantity such as 512Mi",
+			},
+			{
+				name:     "decimal_101_digits_with_point_range_exceeded",
+				path:     "dec",
+				value:    Decimal("1." + strings.Repeat("1", 100)),
+				wantCode: "L403",
+				wantMsg:  "invalid value",
+				wantHint: "keep numbers within 100 digits",
+			},
+			{
+				name:     "quantity_unit_with_digit",
+				path:     "qty",
+				value:    Quantity{Number: "1.5", Unit: "M1"},
+				wantCode: "L403",
+				wantMsg:  "invalid value",
+				wantHint: "write a quantity such as 512Mi",
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				f := pathTParse(t, "test.lkal", "@lkal \"0.1\"\n")
+				origFmtBytes := f.Format()
+				if origFmtBytes == nil {
+					t.Fatalf("Format() returned nil, want non-nil")
+				}
+				origFmt := string(origFmtBytes)
+
+				err := f.Set(tc.path, tc.value)
+				pathTCheckSingleError(t, err, "test.lkal", tc.wantCode, tc.wantMsg, tc.wantHint)
+
+				postFmtBytes := f.Format()
+				if postFmtBytes == nil {
+					t.Fatalf("Format() returned nil after failed Set, want non-nil")
+				}
+				postFmt := string(postFmtBytes)
+				if postFmt != origFmt {
+					t.Errorf("File changed after failed Set:\ngot:\n%s\nwant:\n%s", postFmt, origFmt)
+				}
+			})
+		}
+	})
+}
+
+func TestSetL403Order(t *testing.T) {
+	tests := []struct {
+		name     string
+		src      string
+		path     string
+		value    Value
+		wantCode string
+		wantMsg  string
+		wantHint string
+	}{
+		{
+			name:     "record_dollar_key_precedes_field_value_validation",
+			src:      "@lkal \"0.1\"\n",
+			path:     "rec",
+			value:    Record{Fields: []Field{{Key: "a", Value: Decimal("1.")}, {Key: "$b", Value: Int(1)}}},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "rename keys that start with $",
+		},
+		{
+			name:     "record_duplicate_key_precedes_field_value_validation",
+			src:      "@lkal \"0.1\"\n",
+			path:     "rec",
+			value:    Record{Fields: []Field{{Key: "a", Value: Decimal("1.")}, {Key: "a", Value: Int(1)}}},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "remove the duplicate key",
+		},
+		{
+			name: "collection_duplicate_label_precedes_body_validation",
+			src:  "@lkal \"0.1\"\n",
+			path: "coll",
+			value: Collection{Elems: []Elem{
+				{Label: "x", Body: Record{Fields: []Field{{Key: "a", Value: Decimal("1.")}}}},
+				{Label: "x", Body: Record{}},
+			}},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "remove the duplicate label",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := pathTParse(t, "test.lkal", tc.src)
+			origFmtBytes := f.Format()
+			if origFmtBytes == nil {
+				t.Fatalf("Format() returned nil, want non-nil")
+			}
+			origFmt := string(origFmtBytes)
+
+			err := f.Set(tc.path, tc.value)
+			pathTCheckSingleError(t, err, "test.lkal", tc.wantCode, tc.wantMsg, tc.wantHint)
+
+			postFmtBytes := f.Format()
+			if postFmtBytes == nil {
+				t.Fatalf("Format() returned nil after failed Set, want non-nil")
+			}
+			postFmt := string(postFmtBytes)
+			if postFmt != origFmt {
+				t.Errorf("File changed after failed Set:\ngot:\n%s\nwant:\n%s", postFmt, origFmt)
+			}
+		})
+	}
+}
+
+func TestSetDepth(t *testing.T) {
+	docSrc := "@lkal \"0.1\"\n" + strings.Repeat("r {\n", 999) + "x = 1\n" + strings.Repeat("}\n", 999)
+	setPath := strings.Repeat("r/", 999) + "sub"
+
+	tests := []struct {
+		name     string
+		value    Value
+		wantErr  bool
+		wantCode string
+		wantMsg  string
+		wantHint string
+	}{
+		{
+			name:     "innermost_record_add_two_levels_exceeds_1000",
+			value:    Record{Fields: []Field{{Key: "a", Value: Record{Fields: []Field{{Key: "b", Value: Int(1)}}}}}},
+			wantErr:  true,
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "nest blocks at most 1000 levels deep",
+		},
+		{
+			name:    "innermost_record_add_one_level_succeeds",
+			value:   Record{Fields: []Field{{Key: "a", Value: Int(1)}}},
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := pathTParse(t, "depth.lkal", docSrc)
+			origFmtBytes := f.Format()
+			if origFmtBytes == nil {
+				t.Fatalf("Format() returned nil, want non-nil")
+			}
+			origFmt := string(origFmtBytes)
+
+			err := f.Set(setPath, tc.value)
+			if tc.wantErr {
+				pathTCheckSingleError(t, err, "depth.lkal", tc.wantCode, tc.wantMsg, tc.wantHint)
+
+				postFmtBytes := f.Format()
+				if postFmtBytes == nil {
+					t.Fatalf("Format() returned nil after failed Set, want non-nil")
+				}
+				postFmt := string(postFmtBytes)
+				if postFmt != origFmt {
+					t.Errorf("File changed after failed Set:\ngot:\n%s\nwant:\n%s", postFmt, origFmt)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Set(%q, %#v) unexpected error: %v", setPath, tc.value, err)
+			}
+			gotVal, getErr := f.Get(setPath)
+			if getErr != nil {
+				t.Fatalf("Get(%q) unexpected error: %v", setPath, getErr)
+			}
+			if gotVal == nil {
+				t.Fatalf("Get(%q) returned nil Value", setPath)
+			}
+			pathTCheckEqualAndOrder(t, gotVal, tc.value)
+
+			postFmtBytes := f.Format()
+			if postFmtBytes == nil {
+				t.Fatalf("Format() returned nil after successful Set, want non-nil")
+			}
+			parsed := pathTParse(t, "", string(postFmtBytes))
+			pathTCheckEqualAndOrder(t, f.Data(), parsed.Data())
+		})
+	}
+}
+
+func TestParseValueImplementationReview(t *testing.T) {
+	deepSrc1001 := "{ " + strings.Repeat("a { ", 1000) + "x = 1" + strings.Repeat(" }", 1001)
+	col1001 := strings.LastIndex(deepSrc1001, "{") + 1
+	if col1001 != 4001 {
+		t.Fatalf("computed col1001 mismatch: got %d, want %d", col1001, 4001)
+	}
+
+	errorTests := []struct {
+		name       string
+		src        string
+		wantErrors []pathTExpectedError
+	}{
+		{
+			name: "list_mixed_types_with_extra_token",
+			src:  `[1, "a"] x`,
+			wantErrors: []pathTExpectedError{
+				{
+					code: "L204",
+					line: 1,
+					col:  5,
+					msg:  "list mixes types",
+					hint: "use one type for all elements",
+				},
+				{
+					code: "L106",
+					line: 1,
+					col:  10,
+					msg:  "unexpected token",
+					hint: "write a value: string, number, quantity, boolean, enum, reference, list or \\ lines",
+				},
+			},
+		},
+		{
+			name: "record_dollar_key_with_extra_token",
+			src:  `{ "$k" = 1 } junk`,
+			wantErrors: []pathTExpectedError{
+				{
+					code: "L205",
+					line: 1,
+					col:  3,
+					msg:  "key starts with $",
+					hint: "rename the key",
+				},
+				{
+					code: "L106",
+					line: 1,
+					col:  14,
+					msg:  "unexpected token",
+					hint: "write a value: string, number, quantity, boolean, enum, reference, list or \\ lines",
+				},
+			},
+		},
+		{
+			name: "record_value_nested_1001_levels_l107",
+			src:  deepSrc1001,
+			wantErrors: []pathTExpectedError{
+				{
+					code: "L107",
+					line: 1,
+					col:  col1001,
+					msg:  "blocks nested too deeply",
+					hint: "nest blocks at most 1000 levels deep",
+				},
+			},
+		},
+	}
+
+	for _, tc := range errorTests {
+		t.Run(tc.name, func(t *testing.T) {
+			val, err := ParseValue([]byte(tc.src))
+			if err == nil {
+				t.Fatalf("ParseValue(%q) succeeded unexpectedly, got %#v", tc.src, val)
+			}
+			if val != nil {
+				t.Errorf("ParseValue(%q) value:\ngot:  %#v\nwant: nil", tc.src, val)
+			}
+			pathTCheckErrors(t, err, tc.wantErrors)
+		})
+	}
+
+	t.Run("record_value_nested_1000_levels_succeeds", func(t *testing.T) {
+		deepSrc1000 := "{ " + strings.Repeat("a { ", 999) + "x = 1" + strings.Repeat(" }", 1000)
+		val, err := ParseValue([]byte(deepSrc1000))
+		if err != nil {
+			t.Fatalf("ParseValue(1000 levels) unexpected error: %v", err)
+		}
+		if val == nil {
+			t.Fatalf("ParseValue(1000 levels) returned nil Value, want Record")
+		}
+		if _, ok := val.(Record); !ok {
+			t.Errorf("ParseValue(1000 levels) type:\ngot:  %T\nwant: Record", val)
+		}
+	})
+}

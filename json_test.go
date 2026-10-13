@@ -124,11 +124,15 @@ func jsonTExtractErrors(el *ErrorList) []string {
 
 func jsonTIsKnownJSONErrorCode(code string) bool {
 	switch code {
-	case "L005", "L105", "L201", "L204", "L205", "L207", "L301", "L302", "L303", "L304", "L305":
+	case "L005", "L105", "L107", "L201", "L204", "L205", "L207", "L301", "L302", "L303", "L304", "L305":
 		return true
 	default:
 		return false
 	}
+}
+
+func jsonTComputeBlockBraceCol(prefix, unit string, count int) int {
+	return len(prefix) + (count-1)*len(unit) + strings.LastIndex(unit, "{") + 1
 }
 
 func TestToJSONLayout(t *testing.T) {
@@ -397,6 +401,68 @@ func TestToJSONNil(t *testing.T) {
 			}
 			if got != nil {
 				t.Errorf("ToJSON(nil, %v) returned non-nil bytes: %v", plain, got)
+			}
+		})
+	}
+}
+
+func TestToJSONDeepDocuments(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "record_1000_levels",
+			src:  "@lkal \"0.1\"\n" + strings.Repeat("a {\n", 1000) + "x = 1\n" + strings.Repeat("}\n", 1000),
+		},
+		{
+			name: "element_1000_levels",
+			src:  "@lkal \"0.1\"\n" + strings.Repeat("c \"l\" {\n", 1000) + "x = 1\n" + strings.Repeat("}\n", 1000),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := Parse(tt.name+".lkal", []byte(tt.src))
+			if err != nil {
+				t.Fatalf("Parse(%s) failed: got %v, want nil", tt.name, err)
+			}
+			if f == nil {
+				t.Fatalf("Parse(%s) returned nil File: got nil, want non-nil", tt.name)
+			}
+
+			jLKAL, err := ToJSON(f, false)
+			if err != nil {
+				t.Fatalf("ToJSON(f, false) failed: got %v, want nil", err)
+			}
+			if jLKAL == nil {
+				t.Fatalf("ToJSON(f, false) returned nil bytes: got nil, want non-nil")
+			}
+			if !json.Valid(jLKAL) {
+				t.Errorf("ToJSON(f, false) output is not valid JSON: got invalid, want valid")
+			}
+
+			jPlain, err := ToJSON(f, true)
+			if err != nil {
+				t.Fatalf("ToJSON(f, true) failed: got %v, want nil", err)
+			}
+			if jPlain == nil {
+				t.Fatalf("ToJSON(f, true) returned nil bytes: got nil, want non-nil")
+			}
+			if !json.Valid(jPlain) {
+				t.Errorf("ToJSON(f, true) output is not valid JSON: got invalid, want valid")
+			}
+
+			g, err := FromJSON(jLKAL)
+			if err != nil {
+				t.Fatalf("FromJSON(ToJSON(f, false)) failed: got %v, want nil", err)
+			}
+			if g == nil {
+				t.Fatalf("FromJSON(ToJSON(f, false)) returned nil File: got nil, want non-nil")
+			}
+
+			if !Equal(g.Data(), f.Data()) {
+				t.Errorf("FromJSON(ToJSON(f, false)) Data() mismatch:\ngot:  %#v\nwant: %#v", g.Data(), f.Data())
 			}
 		})
 	}
@@ -1176,6 +1242,51 @@ func TestFromJSONErrors(t *testing.T) {
 			input:      `{"$lkal": [1,}`,
 			wantErrors: []string{"L105 1:11", "L301 1:13"},
 		},
+		{
+			name:       "amendment4_unclosed_lkal_key",
+			input:      `{"$lkal"`,
+			wantErrors: []string{"L301 1:9"},
+		},
+		{
+			name:       "amendment4_missing_colon_after_lkal",
+			input:      `{"$lkal" "0.1"}`,
+			wantErrors: []string{"L301 1:10"},
+		},
+		{
+			name:       "amendment4_lkal_partial_boolean",
+			input:      `{"$lkal": tru}`,
+			wantErrors: []string{"L301 1:14"},
+		},
+		{
+			name:       "amendment4_lkal_unquoted_char",
+			input:      `{"$lkal": x}`,
+			wantErrors: []string{"L301 1:11"},
+		},
+		{
+			name:       "amendment4_enum_partial_boolean",
+			input:      `{"$lkal":"0.1","a":{"$enum":tru}}`,
+			wantErrors: []string{"L301 1:32"},
+		},
+		{
+			name:       "amendment4_enum_empty_value",
+			input:      `{"$lkal":"0.1","a":{"$enum":}`,
+			wantErrors: []string{"L301 1:29"},
+		},
+		{
+			name:       "amendment4_coll_partial_boolean",
+			input:      `{"$lkal":"0.1","c":{"$coll":tru}}`,
+			wantErrors: []string{"L301 1:32"},
+		},
+		{
+			name:       "amendment4_coll_member_unclosed_string",
+			input:      `{"$lkal":"0.1","c":{"$coll":{"x":"abc}}}`,
+			wantErrors: []string{"L301 1:41"},
+		},
+		{
+			name:       "amendment4_coll_record_error_allows_second_key",
+			input:      `{"$lkal":"0.1","c":{"$coll":{"x":{"k":null}},"y":1}}`,
+			wantErrors: []string{"L302 1:39", "L305 1:46"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1451,6 +1562,101 @@ func TestFromJSONDepthLimit(t *testing.T) {
 				if foundL301.Hint != tt.wantHint {
 					t.Errorf("L301 Hint mismatch: got %q, want %q", foundL301.Hint, tt.wantHint)
 				}
+			}
+		})
+	}
+}
+
+func TestFromJSONNestingLimit(t *testing.T) {
+	const (
+		recPrefix  = `{"$lkal":"0.1",`
+		recUnit    = `"a":{`
+		elemPrefix = `{"$lkal":"0.1",`
+		elemUnit   = `"c":{"$coll":{"l":{`
+		hint1000   = "nest blocks at most 1000 levels deep"
+	)
+
+	recCol1001 := jsonTComputeBlockBraceCol(recPrefix, recUnit, 1001)
+	elemCol1001 := jsonTComputeBlockBraceCol(elemPrefix, elemUnit, 1001)
+
+	tests := []struct {
+		name     string
+		input    string
+		wantOK   bool
+		wantCode string
+		wantCol  int
+		wantHint string
+	}{
+		{
+			name:   "records_1000_levels_succeeds",
+			input:  recPrefix + strings.Repeat(recUnit, 1000) + strings.Repeat("}", 1000) + "}",
+			wantOK: true,
+		},
+		{
+			name:     "records_1001_levels_l107",
+			input:    recPrefix + strings.Repeat(recUnit, 1001) + strings.Repeat("}", 1001) + "}",
+			wantOK:   false,
+			wantCode: "L107",
+			wantCol:  recCol1001,
+			wantHint: hint1000,
+		},
+		{
+			name:     "elements_1001_levels_l107",
+			input:    elemPrefix + strings.Repeat(elemUnit, 1001) + strings.Repeat("}}}", 1001) + "}",
+			wantOK:   false,
+			wantCode: "L107",
+			wantCol:  elemCol1001,
+			wantHint: hint1000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := FromJSON([]byte(tt.input))
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("FromJSON failed unexpectedly: got %v, want nil", err)
+				}
+				if f == nil {
+					t.Fatalf("FromJSON returned nil File: got nil, want non-nil")
+				}
+				if gotVer, wantVer := f.Version(), "0.1"; gotVer != wantVer {
+					t.Errorf("Version mismatch: got %q, want %q", gotVer, wantVer)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("FromJSON succeeded unexpectedly: got nil error, want %s error, file: %v", tt.wantCode, f)
+			}
+			if f != nil {
+				t.Errorf("FromJSON returned non-nil File on error: got %v, want nil", f)
+			}
+
+			errList, ok := err.(*ErrorList)
+			if !ok {
+				t.Fatalf("expected *ErrorList: got %T (%v), want *ErrorList", err, err)
+			}
+			if errList == nil || len(errList.Errors) == 0 {
+				t.Fatalf("ErrorList is empty: got 0 errors, want 1 error")
+			}
+			if len(errList.Errors) != 1 {
+				t.Fatalf("error count mismatch: got %d, want 1: %v", len(errList.Errors), jsonTExtractErrors(errList))
+			}
+
+			first := errList.Errors[0]
+			if first == nil {
+				t.Fatalf("first error is nil: got nil, want non-nil Error")
+			}
+			if first.Code != tt.wantCode {
+				t.Errorf("Code mismatch: got %q, want %q", first.Code, tt.wantCode)
+			}
+			wantPos := Pos{Line: 1, Col: tt.wantCol}
+			if first.Pos != wantPos {
+				t.Errorf("Pos mismatch: got %v, want %v", first.Pos, wantPos)
+			}
+			if first.Hint != tt.wantHint {
+				t.Errorf("Hint mismatch: got %q, want %q", first.Hint, tt.wantHint)
 			}
 		})
 	}

@@ -289,6 +289,59 @@ func TestCheckJSON(t *testing.T) {
 	}
 }
 
+func TestCheckJSONInvalidUTF8FileName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "b\xffd.lkal")
+	content := "@lkal \"0.1\"\na = b\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Skip("OS refused invalid UTF-8 filename:", err)
+	}
+
+	args := []string{"check", "--json", path}
+	code, stdout, stderr := execRun(t, args)
+	if code != 1 {
+		t.Errorf("run(%v) exit code mismatch:\ngot %d, want 1\nstdout: got %q\nstderr: got %q", args, code, stdout, stderr)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(stderr, "\n"), "\n")
+	if len(lines) != 1 || lines[0] == "" {
+		t.Errorf("run(%v) stderr is not exactly one non-empty line:\nexit code: got %d\nstdout: got %q\nstderr: got %q", args, code, stdout, stderr)
+		return
+	}
+
+	type errEntry struct {
+		File string `json:"file"`
+		Line int    `json:"line"`
+		Col  int    `json:"col"`
+		Code string `json:"code"`
+	}
+
+	var entries []errEntry
+	if err := json.Unmarshal([]byte(lines[0]), &entries); err != nil {
+		t.Errorf("run(%v) stderr JSON decode error: %v\nexit code: got %d\nstdout: got %q\nstderr: got %q", args, err, code, stdout, stderr)
+		return
+	}
+	if len(entries) != 1 {
+		t.Errorf("run(%v) entries count mismatch:\ngot %d, want 1\nexit code: got %d\nstdout: got %q\nstderr: got %q", args, len(entries), code, stdout, stderr)
+		return
+	}
+
+	wantFile := strings.ToValidUTF8(path, "")
+	e := entries[0]
+	if e.File != wantFile {
+		t.Errorf("run(%v) entry file mismatch:\ngot %q, want %q\nexit code: got %d\nstdout: got %q\nstderr: got %q", args, e.File, wantFile, code, stdout, stderr)
+	}
+	if e.Line != 2 {
+		t.Errorf("run(%v) entry line mismatch:\ngot %d, want 2\nexit code: got %d\nstdout: got %q\nstderr: got %q", args, e.Line, code, stdout, stderr)
+	}
+	if e.Col != 5 {
+		t.Errorf("run(%v) entry col mismatch:\ngot %d, want 5\nexit code: got %d\nstdout: got %q\nstderr: got %q", args, e.Col, code, stdout, stderr)
+	}
+	if e.Code != "L102" {
+		t.Errorf("run(%v) entry code mismatch:\ngot %q, want %q\nexit code: got %d\nstdout: got %q\nstderr: got %q", args, e.Code, "L102", code, stdout, stderr)
+	}
+}
+
 func TestFmt(t *testing.T) {
 	t.Run("single non-canonical to stdout", func(t *testing.T) {
 		dir := t.TempDir()

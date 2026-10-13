@@ -1816,3 +1816,37 @@ func TestErrorCatalogJSONAndPath(t *testing.T) {
 		})
 	}
 }
+
+func TestErrorCatalogL107(t *testing.T) {
+	type nestTCatalogCase struct {
+		code     string
+		wantMsg  string
+		wantHint string
+	}
+
+	tests := []nestTCatalogCase{
+		{
+			code:     "L107",
+			wantMsg:  "blocks nested too deeply",
+			wantHint: "nest blocks at most 1000 levels deep",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.code, func(t *testing.T) {
+			err := newError("", Pos{}, tc.code, "")
+			if err == nil {
+				t.Fatalf("newError(%q) returned nil: got nil, want non-nil *Error", tc.code)
+			}
+			if err.Code != tc.code {
+				t.Errorf("code mismatch for %s: got %q, want %q", tc.code, err.Code, tc.code)
+			}
+			if err.Msg != tc.wantMsg {
+				t.Errorf("msg mismatch for %s: got %q, want %q", tc.code, err.Msg, tc.wantMsg)
+			}
+			if err.Hint != tc.wantHint {
+				t.Errorf("hint mismatch for %s: got %q, want %q", tc.code, err.Hint, tc.wantHint)
+			}
+		})
+	}
+}
