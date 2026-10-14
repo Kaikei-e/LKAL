@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    # Weekly scan for newly disclosed Go standard library / toolchain vulnerabilities
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  lint:
+    name: Lint & Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check formatting (gofmt)
+        run: |
+          unformatted="$(gofmt -s -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "The following files are not formatted with gofmt -s:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Validate ADRs (DocDag)
+        run: go run github.com/Kaikei-e/DocDag/cmd/docdag@v0.5.0 validate
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  test:
+    name: Test & Race Detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run unit & conformance tests with race detector
+        run: go test -race -short -count=1 -shuffle=on ./...
+
+      - name: Run complexity scaling tests
+        run: go test -count=1 -run '^(TestParseScalesLinearly|TestFromJSONManyErrorsLinear)$' ./...
+
+      - name: Build CLI and verify sample fixtures
+        run: |
+          go build -trimpath -o lkal ./cmd/lkal
+          ./lkal check testdata/format/*.lkal
+          rm -f lkal
+
+  fuzz:
+    name: Fuzz Smoke (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzParse
+          - FuzzFormat
+          - FuzzFromJSON
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run fuzz target
+        env:
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          case "${FUZZ_TARGET}" in
+            FuzzParse|FuzzFormat|FuzzFromJSON) ;;
+            *) echo "Unknown fuzz target: ${FUZZ_TARGET}" >&2; exit 1 ;;
+          esac
+          pkg_dir="$(grep -rl "func ${FUZZ_TARGET}(" . --include='*_test.go' | head -n 1 | xargs dirname)"
+          if [ -z "${pkg_dir}" ]; then
+            echo "Fuzz target ${FUZZ_TARGET} not found" >&2
+            exit 1
+          fi
+          go test -run '^$' -fuzz="^${FUZZ_TARGET}$" -fuzztime=20s -parallel=2 "${pkg_dir}"
+
+  workflow-security:
+    name: Workflow Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          advanced-security: false
+          persona: pedantic
