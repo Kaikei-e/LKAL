@@ -1,7 +1,9 @@
 @lkal "0.1"
 
 d {}
-c "x" {}
+c {
+  x {}
+}
 pkg {
   "true" = "reserved"
   "app.kubernetes.io/name" = "my-app"
@@ -9,6 +11,8 @@ pkg {
     \\echo start
     \\echo end
 }
-service "api" {
-  port = 80
+service {
+  api {
+    port = 80
+  }
 }

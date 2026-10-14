@@ -1,58 +1,52 @@
 {
   "$lkal": "0.1",
   "service": {
-    "$coll": {
-      "web": {
-        "replicas": 3,
-        "traffic-share": 0.25,
-        "labels": {
-          "app.kubernetes.io/name": "web",
-          "tier": "frontend"
-        },
-        "container": {
-          "$coll": {
-            "app": {
-              "image": "ghcr.io/acme/web:1.4.2",
-              "args": [
-                "--port",
-                "8080"
-              ],
-              "memory": {
-                "$qty": "512Mi"
-              },
-              "cpu": {
-                "$qty": "250m"
-              },
-              "timeout": {
-                "$qty": "30s"
-              },
-              "port": {
-                "$coll": {
-                  "http": {
-                    "number": 8080,
-                    "protocol": {
-                      "$enum": "tcp"
-                    }
-                  },
-                  "metrics": {
-                    "number": 9090,
-                    "protocol": {
-                      "$enum": "tcp"
-                    }
-                  }
-                }
-              },
-              "env": {
-                "LOG_LEVEL": "info"
-              },
-              "secret": {
-                "$ref": "secret/db-creds"
+    "web": {
+      "replicas": 3,
+      "traffic-share": 0.25,
+      "labels": {
+        "app.kubernetes.io/name": "web",
+        "tier": "frontend"
+      },
+      "container": {
+        "app": {
+          "image": "ghcr.io/acme/web:1.4.2",
+          "args": [
+            "--port",
+            "8080"
+          ],
+          "memory": {
+            "$qty": "512Mi"
+          },
+          "cpu": {
+            "$qty": "250m"
+          },
+          "timeout": {
+            "$qty": "30s"
+          },
+          "port": {
+            "http": {
+              "number": 8080,
+              "protocol": {
+                "$enum": "tcp"
+              }
+            },
+            "metrics": {
+              "number": 9090,
+              "protocol": {
+                "$enum": "tcp"
               }
             }
+          },
+          "env": {
+            "LOG_LEVEL": "info"
+          },
+          "secret": {
+            "$ref": "secret/db-creds"
           }
-        },
-        "startup": "#!/bin/sh\nexec /app/web --port 8080"
-      }
+        }
+      },
+      "startup": "#!/bin/sh\nexec /app/web --port 8080"
     }
   }
 }

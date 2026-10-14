@@ -156,8 +156,8 @@ func FuzzParse(f *testing.F) {
 func parserFuzzIsKnownErrorCode(code string) bool {
 	switch code {
 	case "L001", "L002", "L003", "L004", "L005", "L006", "L007", "L008", "L009",
-		"L101", "L102", "L103", "L104", "L105", "L106",
-		"L201", "L202", "L203", "L204", "L205", "L206", "L207":
+		"L101", "L102", "L103", "L104", "L105", "L106", "L107",
+		"L201", "L204", "L205", "L207":
 		return true
 	default:
 		return false

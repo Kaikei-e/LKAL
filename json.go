@@ -70,20 +70,6 @@ func (w *jsonWriter) value(v Value) {
 			w.value(f.Value)
 		}
 		w.token(jsontext.EndObject)
-	case Collection:
-		if !w.plain {
-			w.token(jsontext.BeginObject)
-			w.token(jsontext.String("$coll"))
-		}
-		w.token(jsontext.BeginObject)
-		for _, el := range v.Elems {
-			w.token(jsontext.String(el.Label))
-			w.value(el.Body)
-		}
-		w.token(jsontext.EndObject)
-		if !w.plain {
-			w.token(jsontext.EndObject)
-		}
 	}
 }
 
@@ -115,10 +101,6 @@ func blockFromRecord(r Record) *block {
 		switch val := f.Value.(type) {
 		case Record:
 			b.entries = append(b.entries, &entry{kind: entryRecord, key: f.Key, body: blockFromRecord(val)})
-		case Collection:
-			for _, el := range val.Elems {
-				b.entries = append(b.entries, &entry{kind: entryElem, key: f.Key, label: el.Label, body: blockFromRecord(el.Body)})
-			}
 		default:
 			b.entries = append(b.entries, &entry{kind: entryAssign, key: f.Key, value: nodeFromValue(val)})
 		}
@@ -176,7 +158,6 @@ var tagHints = map[string]string{
 	"$enum": `write the enum name as a string, for example {"$enum": "tcp"}`,
 	"$qty":  `write the quantity as a string, for example {"$qty": "512Mi"}`,
 	"$ref":  `write the reference as a string, for example {"$ref": "secret/db-creds"}`,
-	"$coll": `write {"$coll": {"label": {...}}} with at least one element`,
 }
 
 type jsonError struct {
@@ -342,7 +323,7 @@ func (r *jsonReader) value(depth int) (Value, bool) {
 		return nil, false
 	}
 	if tok.Kind() == '{' {
-		return r.object(off, depth, false)
+		return r.object(off, depth)
 	}
 	return r.convert(tok, off, false)
 }
@@ -387,17 +368,17 @@ func (r *jsonReader) convert(tok jsontext.Token, off int, inList bool) (Value, b
 			return nil, false
 		}
 		key := tok.String()
-		if tagHints[key] == "" || key == "$coll" {
+		if tagHints[key] == "" {
 			r.fail(off, "L304", "")
 			r.skipTo(r.dec.StackDepth() - 1)
 			return nil, false
 		}
-		return r.tag(key, 0)
+		return r.tag(key)
 	}
 	return nil, false
 }
 
-func (r *jsonReader) object(off, depth int, elem bool) (Value, bool) {
+func (r *jsonReader) object(off, depth int) (Value, bool) {
 	tok, keyOff, ok := r.next()
 	if !ok {
 		return nil, false
@@ -411,12 +392,7 @@ func (r *jsonReader) object(off, depth int, elem bool) (Value, bool) {
 	}
 	key := tok.String()
 	if tagHints[key] != "" {
-		if elem {
-			r.failTag(off, tagHints["$coll"])
-			r.skipTo(r.dec.StackDepth() - 1)
-			return nil, false
-		}
-		return r.tag(key, depth-1)
+		return r.tag(key)
 	}
 	if depth > maxBlockDepth {
 		r.fail(off, "L107", "")
@@ -457,7 +433,7 @@ func (r *jsonReader) list() (Value, bool) {
 	return list, true
 }
 
-func (r *jsonReader) tag(name string, depth int) (Value, bool) {
+func (r *jsonReader) tag(name string) (Value, bool) {
 	stackDepth := r.dec.StackDepth()
 	tok, off, ok := r.next()
 	if !ok {
@@ -476,11 +452,6 @@ func (r *jsonReader) tag(name string, depth int) (Value, bool) {
 		r.fail(off, "L302", "")
 		r.skipTo(stackDepth - 1)
 		return nil, false
-	case name == "$coll":
-		v, valid = r.coll(tok, off, depth, stackDepth)
-		if r.dec.StackDepth() < stackDepth {
-			return nil, false
-		}
 	case tok.Kind() != '"':
 		r.failTag(off, tagHints[name])
 		r.skipTo(stackDepth - 1)
@@ -530,75 +501,6 @@ func (r *jsonReader) scalarTag(name, s string, off int) (Value, bool) {
 	}
 	r.failTag(off, tagHints[name])
 	return nil, false
-}
-
-func (r *jsonReader) coll(tok jsontext.Token, off, depth, stackDepth int) (Value, bool) {
-	if tok.Kind() != '{' {
-		r.failTag(off, tagHints["$coll"])
-		r.skipTo(stackDepth - 1)
-		return nil, false
-	}
-	tok, labelOff, rok := r.next()
-	if !rok {
-		return nil, false
-	}
-	if tok.Kind() == '}' {
-		r.failTag(off, tagHints["$coll"])
-		r.skipTo(stackDepth - 1)
-		return nil, false
-	}
-	var c Collection
-	seen := map[string]bool{}
-	ok := true
-	for {
-		label := tok.String()
-		if seen[label] {
-			r.fail(labelOff, "L201", "")
-			ok = false
-			r.skipValue()
-		} else {
-			seen[label] = true
-			valTok, valOff, vrok := r.next()
-			if !vrok {
-				return nil, false
-			}
-			switch valTok.Kind() {
-			case 'n':
-				r.fail(valOff, "L302", "")
-				ok = false
-			case '{':
-				body, bok := r.elemRecord(valOff, depth+1)
-				if bok {
-					c.Elems = append(c.Elems, Elem{Label: label, Body: body})
-				} else {
-					ok = false
-				}
-			default:
-				r.failTag(valOff, tagHints["$coll"])
-				r.skip(valTok)
-				ok = false
-			}
-		}
-		tok, labelOff, rok = r.next()
-		if !rok {
-			return nil, false
-		}
-		if tok.Kind() == '}' {
-			break
-		}
-	}
-	if !ok || len(c.Elems) == 0 {
-		return nil, false
-	}
-	return c, true
-}
-
-func (r *jsonReader) elemRecord(off, depth int) (Record, bool) {
-	v, ok := r.object(off, depth, true)
-	if rec, isRec := v.(Record); isRec {
-		return rec, ok
-	}
-	return Record{}, false
 }
 
 func (r *jsonReader) errorList() *ErrorList {

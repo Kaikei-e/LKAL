@@ -7,16 +7,15 @@ type Value interface {
 }
 
 type (
-	String     string
-	Int        int64
-	Decimal    string
-	Bool       bool
-	Enum       string
-	Quantity   struct{ Number, Unit string }
-	Ref        []string
-	List       []Value
-	Record     struct{ Fields []Field }
-	Collection struct{ Elems []Elem }
+	String   string
+	Int      int64
+	Decimal  string
+	Bool     bool
+	Enum     string
+	Quantity struct{ Number, Unit string }
+	Ref      []string
+	List     []Value
+	Record   struct{ Fields []Field }
 )
 
 type Field struct {
@@ -24,21 +23,15 @@ type Field struct {
 	Value Value
 }
 
-type Elem struct {
-	Label string
-	Body  Record
-}
-
-func (String) lkalValue()     {}
-func (Int) lkalValue()        {}
-func (Decimal) lkalValue()    {}
-func (Bool) lkalValue()       {}
-func (Enum) lkalValue()       {}
-func (Quantity) lkalValue()   {}
-func (Ref) lkalValue()        {}
-func (List) lkalValue()       {}
-func (Record) lkalValue()     {}
-func (Collection) lkalValue() {}
+func (String) lkalValue()   {}
+func (Int) lkalValue()      {}
+func (Decimal) lkalValue()  {}
+func (Bool) lkalValue()     {}
+func (Enum) lkalValue()     {}
+func (Quantity) lkalValue() {}
+func (Ref) lkalValue()      {}
+func (List) lkalValue()     {}
+func (Record) lkalValue()   {}
 
 func Equal(a, b Value) bool {
 	if a == nil || b == nil {
@@ -81,11 +74,6 @@ func Equal(a, b Value) bool {
 		vb, ok := b.(Record)
 		return ok && matchUnordered(len(va.Fields), len(vb.Fields), func(i, j int) bool {
 			return va.Fields[i].Key == vb.Fields[j].Key && Equal(va.Fields[i].Value, vb.Fields[j].Value)
-		})
-	case Collection:
-		vb, ok := b.(Collection)
-		return ok && matchUnordered(len(va.Elems), len(vb.Elems), func(i, j int) bool {
-			return va.Elems[i].Label == vb.Elems[j].Label && Equal(va.Elems[i].Body, vb.Elems[j].Body)
 		})
 	default:
 		return false

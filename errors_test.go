@@ -161,7 +161,7 @@ func TestErrorRendering(t *testing.T) {
 		err2 := &Error{
 			File: "doc.lkal",
 			Pos:  Pos{Line: 2, Col: 4},
-			Code: "L202",
+			Code: "L204",
 			Msg:  "second msg",
 			Hint: "second hint",
 		}
@@ -472,52 +472,36 @@ func TestSemanticErrors(t *testing.T) {
 			wantHint: "remove one of them",
 		},
 		{
-			name:     "L202_AssignThenRecord",
+			name:     "L201_AssignThenRecord",
 			src:      "@lkal \"0.1\"\nk = 1\nk {}\n",
-			wantCode: "L202",
+			wantCode: "L201",
 			wantPos:  errPos(3, 1),
-			wantMsg:  "key used for more than one kind of entry",
-			wantHint: "use the key for one kind only: assignment, record or collection",
+			wantMsg:  "duplicate key or label",
+			wantHint: "remove one of them",
 		},
 		{
-			name:     "L202_RecordThenCollection",
+			name:     "L201_RecordThenLabeledBlock",
 			src:      "@lkal \"0.1\"\nk {}\nk \"a\" {}\n",
-			wantCode: "L202",
+			wantCode: "L201",
 			wantPos:  errPos(3, 1),
-			wantMsg:  "key used for more than one kind of entry",
-			wantHint: "use the key for one kind only: assignment, record or collection",
+			wantMsg:  "duplicate key or label",
+			wantHint: "remove one of them",
 		},
 		{
-			name:     "L202_CollectionThenAssign",
+			name:     "L201_LabeledBlockThenAssign",
 			src:      "@lkal \"0.1\"\nk \"a\" {}\nk = 1\n",
-			wantCode: "L202",
+			wantCode: "L201",
 			wantPos:  errPos(3, 1),
-			wantMsg:  "key used for more than one kind of entry",
-			wantHint: "use the key for one kind only: assignment, record or collection",
+			wantMsg:  "duplicate key or label",
+			wantHint: "remove one of them",
 		},
 		{
-			name:     "L203_SeparatedByAssign",
-			src:      "@lkal \"0.1\"\nport \"http\" {}\nhost = \"localhost\"\nport \"grpc\" {}\n",
-			wantCode: "L203",
-			wantPos:  errPos(4, 1),
-			wantMsg:  "collection elements are not contiguous",
-			wantHint: "write the elements next to each other",
-		},
-		{
-			name:     "L203_SeparatedByRecord",
-			src:      "@lkal \"0.1\"\nw \"a\" {}\nm {}\nw \"b\" {}\n",
-			wantCode: "L203",
-			wantPos:  errPos(4, 1),
-			wantMsg:  "collection elements are not contiguous",
-			wantHint: "write the elements next to each other",
-		},
-		{
-			name:     "L203_SeparatedInNestedRecord",
-			src:      "@lkal \"0.1\"\nbox {\n  item \"a\" {}\n  cnt = 1\n  item \"b\" {}\n}\n",
-			wantCode: "L203",
-			wantPos:  errPos(5, 3),
-			wantMsg:  "collection elements are not contiguous",
-			wantHint: "write the elements next to each other",
+			name:     "L201_MultiLabelDuplicate",
+			src:      "@lkal \"0.1\"\nroute \"GET\" \"/users\" {}\nroute \"GET\" \"/users\" {}\n",
+			wantCode: "L201",
+			wantPos:  errPos(3, 13),
+			wantMsg:  "duplicate key or label",
+			wantHint: "remove one of them",
 		},
 		{
 			name:     "L204_IntAndString",
@@ -584,7 +568,7 @@ func TestSemanticErrors(t *testing.T) {
 			wantHint: "rename the key",
 		},
 		{
-			name:     "L205_DollarCollectionKey",
+			name:     "L205_DollarLabeledKey",
 			src:      "@lkal \"0.1\"\n\"$coll\" \"a\" {}\n",
 			wantCode: "L205",
 			wantPos:  errPos(2, 1),
@@ -592,20 +576,12 @@ func TestSemanticErrors(t *testing.T) {
 			wantHint: "rename the key",
 		},
 		{
-			name:     "L206_CollectionAssign",
-			src:      "@lkal \"0.1\"\nitem \"lbl\" = 1\n",
-			wantCode: "L206",
-			wantPos:  errPos(2, 12),
-			wantMsg:  "value assigned to a collection element",
-			wantHint: `write a block instead: key "label" { ... }`,
-		},
-		{
-			name:     "L206_CollectionAssignSpaced",
-			src:      "@lkal \"0.1\"\nitem \"lbl\"   = 1\n",
-			wantCode: "L206",
-			wantPos:  errPos(2, 14),
-			wantMsg:  "value assigned to a collection element",
-			wantHint: `write a block instead: key "label" { ... }`,
+			name:     "L205_DollarLabel",
+			src:      "@lkal \"0.1\"\nsvc \"$schema\" {}\n",
+			wantCode: "L205",
+			wantPos:  errPos(2, 5),
+			wantMsg:  "key starts with $",
+			wantHint: "rename the key",
 		},
 		{
 			name:     "L207_Version02",
@@ -663,8 +639,9 @@ func TestSemanticErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("ValidDollarLabel", func(t *testing.T) {
-		file, err := Parse("dollar_label.lkal", []byte("@lkal \"0.1\"\nsvc \"$schema\" {}\n"))
+	t.Run("ValidNonContiguousAndLabeledAssign", func(t *testing.T) {
+		src := "@lkal \"0.1\"\nport \"http\" {}\nhost = \"localhost\"\nport \"grpc\" {}\nitem \"lbl\" = 1\nroute \"GET\" \"/users\" { handler = \"list\" }\n"
+		file, err := Parse("labeled_sugar.lkal", []byte(src))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -675,9 +652,9 @@ func TestSemanticErrors(t *testing.T) {
 }
 
 func TestSemanticPrecedence(t *testing.T) {
-	t.Run("L205_Over_L202", func(t *testing.T) {
+	t.Run("L205_Over_L201_Conflict", func(t *testing.T) {
 		src := "@lkal \"0.1\"\n\"$k\" = 1\n\"$k\" {}\n"
-		file, err := Parse("prec205_202.lkal", []byte(src))
+		file, err := Parse("prec205_201_conflict.lkal", []byte(src))
 		if err == nil {
 			t.Fatalf("expected error, got file: %v", file)
 		}
@@ -703,18 +680,18 @@ func TestSemanticPrecedence(t *testing.T) {
 		errAssertError(t, errList.Errors[1], "L205", errPos(3, 1), "key starts with $", "rename the key", false)
 	})
 
-	t.Run("L202_Over_L201", func(t *testing.T) {
+	t.Run("L201_AssignAndBlock", func(t *testing.T) {
 		src := "@lkal \"0.1\"\nitem = 1\nitem {}\n"
-		file, err := Parse("prec202_201.lkal", []byte(src))
+		file, err := Parse("prec201_assign_block.lkal", []byte(src))
 		if err == nil {
 			t.Fatalf("expected error, got file: %v", file)
 		}
-		errCheckSingle(t, err, "L202", errPos(3, 1), "key used for more than one kind of entry", "use the key for one kind only: assignment, record or collection", false)
+		errCheckSingle(t, err, "L201", errPos(3, 1), "duplicate key or label", "remove one of them", false)
 	})
 
-	t.Run("L201_Over_L203", func(t *testing.T) {
+	t.Run("L201_NonContiguousDuplicateLabel", func(t *testing.T) {
 		src := "@lkal \"0.1\"\nport \"http\" {}\nhost = \"localhost\"\nport \"http\" {}\n"
-		file, err := Parse("prec201_203.lkal", []byte(src))
+		file, err := Parse("prec201_noncontig.lkal", []byte(src))
 		if err == nil {
 			t.Fatalf("expected error, got file: %v", file)
 		}
@@ -859,8 +836,8 @@ a = 1
 a "y" {}
 `
 		assertExactErrors(t, "kind_mixing_elem_assign_elem.lkal", src, []expectedError{
-			{code: "L202", line: 3, col: 1},
-			{code: "L202", line: 4, col: 1},
+			{code: "L201", line: 3, col: 1},
+			{code: "L201", line: 4, col: 1},
 		})
 	})
 
@@ -871,8 +848,8 @@ a "x" {}
 a {}
 `
 		assertExactErrors(t, "kind_mixing_record_elem_record.lkal", src, []expectedError{
-			{code: "L202", line: 3, col: 1},
-			{code: "L202", line: 4, col: 1},
+			{code: "L201", line: 3, col: 1},
+			{code: "L201", line: 4, col: 1},
 		})
 	})
 }

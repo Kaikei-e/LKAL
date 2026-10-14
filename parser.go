@@ -312,14 +312,30 @@ func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRawAssi
 		keyPos:      keyTok.pos,
 	}
 
-	afterKey := p.peek()
-	if afterKey.kind == tokNewline {
-		p.syntaxError(afterKey, "L101", "")
+	origDepth := p.depth
+	defer func() { p.depth = origDepth }()
+
+	for p.peek().kind == tokString {
+		if p.depth >= maxBlockDepth {
+			p.syntaxError(p.peek(), "L107", "")
+			return nil, false
+		}
+		p.depth++
+		labelTok := p.next()
+		ent.labels = append(ent.labels, labelSpan{
+			text: labelTok.text,
+			pos:  labelTok.pos,
+		})
+	}
+
+	afterHeader := p.peek()
+	if afterHeader.kind == tokNewline {
+		p.syntaxError(afterHeader, "L101", "")
 		p.next()
 		return nil, false
 	}
 
-	switch afterKey.kind {
+	switch afterHeader.kind {
 	case tokAssign:
 		ent.kind = entryAssign
 		p.next()
@@ -338,35 +354,12 @@ func (p *parser) parseEntry(comments []comment, blankBefore bool, prevWasRawAssi
 		}
 		ent.body = body
 
-	case tokString:
-		ent.kind = entryElem
-		labelTok := p.next()
-		ent.label = labelTok.text
-		ent.labelPos = labelTok.pos
-
-		afterLabel := p.peek()
-		if afterLabel.kind == tokAssign {
-			p.syntaxError(afterLabel, "L206", "")
-			return nil, false
-		}
-		if afterLabel.kind == tokNewline {
-			p.syntaxError(afterLabel, "L101", "")
-			p.next()
-			return nil, false
-		}
-		if afterLabel.kind != tokLBrace {
-			p.syntaxError(afterLabel, "L106", "follow the label with {")
-			return nil, false
-		}
-
-		body, ok := p.parseBracedBlock()
-		if !ok {
-			return nil, false
-		}
-		ent.body = body
-
 	default:
-		p.syntaxError(afterKey, "L106", `follow the key with =, { or "label"`)
+		hint := `follow the key with =, { or "label"`
+		if len(ent.labels) > 0 {
+			hint = "follow the label with {"
+		}
+		p.syntaxError(afterHeader, "L106", hint)
 		return nil, false
 	}
 
@@ -532,53 +525,56 @@ func (p *parser) parseRaw() *rawNode {
 	return &rawNode{pos: firstTok.pos, lines: lines}
 }
 
+type pathNode struct {
+	terminal bool
+	children map[string]*pathNode
+}
+
+func entrySpanPath(e *entry) []labelSpan {
+	segs := make([]labelSpan, 1+len(e.labels))
+	segs[0] = labelSpan{text: e.key, pos: e.keyPos}
+	copy(segs[1:], e.labels)
+	return segs
+}
+
 func validate(file string, b *block) []*Error {
 	var errs []*Error
-	seenKinds := make(map[string]map[entryKind]bool)
-	seenLabels := make(map[string]map[string]bool)
-	var prevElemKey string
+	root := &pathNode{}
 
 	for _, e := range b.entries {
+		segs := entrySpanPath(e)
 		checkEntry := func() *Error {
-			if strings.HasPrefix(e.key, "$") {
-				return newError(file, e.keyPos, "L205", "")
-			}
-			for k := range seenKinds[e.key] {
-				if k != e.kind {
-					return newError(file, e.keyPos, "L202", "")
+			for _, seg := range segs {
+				if strings.HasPrefix(seg.text, "$") {
+					return newError(file, seg.pos, "L205", "")
 				}
 			}
-			if e.kind == entryAssign || e.kind == entryRecord {
-				if seenKinds[e.key] != nil {
-					return newError(file, e.keyPos, "L201", "")
+			cur := root
+			var firstErr *Error
+			for i, seg := range segs {
+				isLast := i == len(segs)-1
+				if cur.children == nil {
+					cur.children = make(map[string]*pathNode)
 				}
-			} else if e.kind == entryElem {
-				if seenLabels[e.key] != nil && seenLabels[e.key][e.label] {
-					return newError(file, e.labelPos, "L201", "")
+				child, exists := cur.children[seg.text]
+				if !exists {
+					child = &pathNode{}
+					cur.children[seg.text] = child
+				} else if firstErr == nil {
+					if isLast || child.terminal {
+						firstErr = newError(file, seg.pos, "L201", "")
+					}
 				}
+				if isLast {
+					child.terminal = true
+				}
+				cur = child
 			}
-			if e.kind == entryElem && seenKinds[e.key] != nil && prevElemKey != e.key {
-				return newError(file, e.keyPos, "L203", "")
-			}
-			return nil
+			return firstErr
 		}
 
 		if err := checkEntry(); err != nil {
 			errs = append(errs, err)
-		}
-
-		if seenKinds[e.key] == nil {
-			seenKinds[e.key] = make(map[entryKind]bool)
-		}
-		seenKinds[e.key][e.kind] = true
-		if e.kind == entryElem {
-			if seenLabels[e.key] == nil {
-				seenLabels[e.key] = make(map[string]bool)
-			}
-			seenLabels[e.key][e.label] = true
-			prevElemKey = e.key
-		} else {
-			prevElemKey = ""
 		}
 
 		if lst, ok := e.value.(*listNode); ok && len(lst.elems) > 1 {
@@ -598,29 +594,48 @@ func validate(file string, b *block) []*Error {
 	return errs
 }
 
-func buildRecord(b *block) Record {
-	var fields []Field
-	collIndexByKey := make(map[string]int)
+func entryKeyPath(e *entry) []string {
+	segs := make([]string, 1+len(e.labels))
+	segs[0] = e.key
+	for i, l := range e.labels {
+		segs[i+1] = l.text
+	}
+	return segs
+}
 
-	for _, e := range b.entries {
-		switch e.kind {
-		case entryAssign:
-			fields = append(fields, Field{Key: e.key, Value: buildValue(e.value)})
-		case entryRecord:
-			fields = append(fields, Field{Key: e.key, Value: buildRecord(e.body)})
-		case entryElem:
-			elem := Elem{Label: e.label, Body: buildRecord(e.body)}
-			if idx, ok := collIndexByKey[e.key]; ok {
-				coll := fields[idx].Value.(Collection)
-				coll.Elems = append(coll.Elems, elem)
-				fields[idx].Value = coll
-			} else {
-				collIndexByKey[e.key] = len(fields)
-				fields = append(fields, Field{Key: e.key, Value: Collection{Elems: []Elem{elem}}})
+func insertRecordPath(rec *Record, segs []string, val Value) {
+	key := segs[0]
+	if len(segs) == 1 {
+		rec.Fields = append(rec.Fields, Field{Key: key, Value: val})
+		return
+	}
+	for i := range rec.Fields {
+		if rec.Fields[i].Key == key {
+			if sub, ok := rec.Fields[i].Value.(Record); ok {
+				insertRecordPath(&sub, segs[1:], val)
+				rec.Fields[i].Value = sub
+				return
 			}
 		}
 	}
-	return Record{Fields: fields}
+	var sub Record
+	insertRecordPath(&sub, segs[1:], val)
+	rec.Fields = append(rec.Fields, Field{Key: key, Value: sub})
+}
+
+func buildRecord(b *block) Record {
+	var rec Record
+	for _, e := range b.entries {
+		var val Value
+		switch e.kind {
+		case entryAssign:
+			val = buildValue(e.value)
+		case entryRecord:
+			val = buildRecord(e.body)
+		}
+		insertRecordPath(&rec, entryKeyPath(e), val)
+	}
+	return rec
 }
 
 func buildValue(n node) Value {

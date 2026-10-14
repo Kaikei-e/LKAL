@@ -45,20 +45,6 @@ func pathTCheckOrder(t *testing.T, got, want Value) {
 			}
 			pathTCheckOrder(t, g.Fields[i].Value, w.Fields[i].Value)
 		}
-	case Collection:
-		w, ok := want.(Collection)
-		if !ok {
-			t.Fatalf("type mismatch: got Collection, want %T", want)
-		}
-		if len(g.Elems) != len(w.Elems) {
-			t.Fatalf("collection elems length mismatch: got %d, want %d", len(g.Elems), len(w.Elems))
-		}
-		for i := range g.Elems {
-			if g.Elems[i].Label != w.Elems[i].Label {
-				t.Fatalf("elem %d label mismatch: got %q, want %q", i, g.Elems[i].Label, w.Elems[i].Label)
-			}
-			pathTCheckOrder(t, g.Elems[i].Body, w.Elems[i].Body)
-		}
 	case List:
 		w, ok := want.(List)
 		if !ok {
@@ -80,17 +66,17 @@ func TestGet(t *testing.T) {
 	}
 	f := pathTParse(t, "spec_example.lkal", string(data))
 
-	wantPortColl := Collection{Elems: []Elem{
+	wantPortRec := Record{Fields: []Field{
 		{
-			Label: "http",
-			Body: Record{Fields: []Field{
+			Key: "http",
+			Value: Record{Fields: []Field{
 				{Key: "number", Value: Int(8080)},
 				{Key: "protocol", Value: Enum("tcp")},
 			}},
 		},
 		{
-			Label: "metrics",
-			Body: Record{Fields: []Field{
+			Key: "metrics",
+			Value: Record{Fields: []Field{
 				{Key: "number", Value: Int(9090)},
 				{Key: "protocol", Value: Enum("tcp")},
 			}},
@@ -103,23 +89,23 @@ func TestGet(t *testing.T) {
 		{Key: "memory", Value: Quantity{Number: "512", Unit: "Mi"}},
 		{Key: "cpu", Value: Quantity{Number: "250", Unit: "m"}},
 		{Key: "timeout", Value: Quantity{Number: "30", Unit: "s"}},
-		{Key: "port", Value: wantPortColl},
+		{Key: "port", Value: wantPortRec},
 		{Key: "env", Value: Record{Fields: []Field{{Key: "LOG_LEVEL", Value: String("info")}}}},
 		{Key: "secret", Value: Ref{"secret", "db-creds"}},
 	}}
 
-	wantServiceColl := Collection{Elems: []Elem{
+	wantServiceRec := Record{Fields: []Field{
 		{
-			Label: "web",
-			Body: Record{Fields: []Field{
+			Key: "web",
+			Value: Record{Fields: []Field{
 				{Key: "replicas", Value: Int(3)},
 				{Key: "traffic-share", Value: Decimal("0.25")},
 				{Key: "labels", Value: Record{Fields: []Field{
 					{Key: "app.kubernetes.io/name", Value: String("web")},
 					{Key: "tier", Value: String("frontend")},
 				}}},
-				{Key: "container", Value: Collection{Elems: []Elem{
-					{Label: "app", Body: wantAppRecord},
+				{Key: "container", Value: Record{Fields: []Field{
+					{Key: "app", Value: wantAppRecord},
 				}}},
 				{Key: "startup", Value: String("#!/bin/sh\nexec /app/web --port 8080")},
 			}},
@@ -148,7 +134,7 @@ func TestGet(t *testing.T) {
 		},
 		{
 			path: "service/web/container/app/port",
-			want: wantPortColl,
+			want: wantPortRec,
 		},
 		{
 			path: "service/web/container/app",
@@ -156,7 +142,7 @@ func TestGet(t *testing.T) {
 		},
 		{
 			path: "service",
-			want: wantServiceColl,
+			want: wantServiceRec,
 		},
 		{
 			path: "service/web/startup",
@@ -507,7 +493,7 @@ config { a = 10, b = "hi" }
 `,
 		},
 		{
-			name: "replace_collection_key_by_scalar",
+			name: "replace_labeled_entries_by_scalar",
 			src: `@lkal "0.1"
 
 item "one" {
@@ -527,26 +513,62 @@ trailing = true
 `,
 		},
 		{
-			name: "set_collection_value_consecutive_elements",
+			name: "set_nested_record_value",
 			src: `@lkal "0.1"
 
 item = "single"
 trailing = true
 `,
 			path: "item",
-			value: Collection{Elems: []Elem{
-				{Label: "first", Body: Record{Fields: []Field{{Key: "x", Value: Int(1)}}}},
-				{Label: "second", Body: Record{Fields: []Field{{Key: "y", Value: Int(2)}}}},
+			value: Record{Fields: []Field{
+				{Key: "first", Value: Record{Fields: []Field{{Key: "x", Value: Int(1)}}}},
+				{Key: "second", Value: Record{Fields: []Field{{Key: "y", Value: Int(2)}}}},
 			}},
 			wantFormat: `@lkal "0.1"
 
-item "first" {
-  x = 1
-}
-item "second" {
-  y = 2
+item {
+  first {
+    x = 1
+  }
+  second {
+    y = 2
+  }
 }
 trailing = true
+`,
+		},
+		{
+			name: "add_labeled_entry_when_zero_elements_exist",
+			src: `@lkal "0.1"
+
+service "web" {
+  replicas = 3
+}
+`,
+			path:  "service/web/port/http",
+			value: Record{Fields: []Field{{Key: "number", Value: Int(8080)}}},
+			wantFormat: `@lkal "0.1"
+
+service "web" {
+  replicas = 3
+  port "http" {
+    number = 8080
+  }
+}
+`,
+		},
+		{
+			name: "add_labeled_assignment_at_root",
+			src: `@lkal "0.1"
+
+a = 1
+`,
+			path:  "env/LOG_LEVEL",
+			value: String("info"),
+			wantFormat: `@lkal "0.1"
+
+a = 1
+env "LOG_LEVEL" = "info"
 `,
 		},
 		{
@@ -818,27 +840,6 @@ msg = "a\nb\u{1}"
 `,
 		},
 		{
-			name: "label_starting_with_dollar",
-			src: `@lkal "0.1"
-
-service "web" {
-  x = 1
-}
-`,
-			path:    "service/\"$admin\"",
-			value:   Record{Fields: []Field{{Key: "enabled", Value: Bool(true)}}},
-			wantGet: Bool(true),
-			wantFormat: `@lkal "0.1"
-
-service "web" {
-  x = 1
-}
-service "$admin" {
-  enabled = true
-}
-`,
-		},
-		{
 			name: "anchor_example",
 			src: `@lkal "0.1"
 
@@ -882,9 +883,7 @@ service "web" {
 
 			if tc.wantGet != nil {
 				getPath := tc.path
-				if tc.name == "label_starting_with_dollar" {
-					getPath = tc.path + "/enabled"
-				} else if tc.name == "quantity_normalized_inside_record" {
+				if tc.name == "quantity_normalized_inside_record" {
 					getPath = tc.path + "/mem"
 				}
 				val, getErr := f.Get(getPath)
@@ -953,13 +952,13 @@ service "web" {
 			wantHint: "separate segments with / and quote segments that contain other characters",
 		},
 		{
-			name:     "l402_missing_parent",
+			name:     "l402_root_parent_is_assignment",
 			src:      baseSrc,
-			path:     "missing/key",
+			path:     "a/key",
 			value:    Int(1),
 			wantCode: "L402",
 			wantMsg:  "path not found",
-			wantHint: "check the path at segment \"missing\"",
+			wantHint: "check the path at segment \"key\"",
 		},
 		{
 			name:     "l402_parent_is_assignment",
@@ -1079,15 +1078,6 @@ service "web" {
 			wantHint: "use valid UTF-8 text",
 		},
 		{
-			name:     "l403_invalid_utf8_label",
-			src:      baseSrc,
-			path:     "coll",
-			value:    Collection{Elems: []Elem{{Label: "l\xff", Body: Record{Fields: []Field{{Key: "k", Value: Int(1)}}}}}},
-			wantCode: "L403",
-			wantMsg:  "invalid value",
-			wantHint: "use valid UTF-8 text",
-		},
-		{
 			name:     "l403_invalid_utf8_ref_segment",
 			src:      baseSrc,
 			path:     "r",
@@ -1110,15 +1100,6 @@ service "web" {
 			src:      baseSrc,
 			path:     "list",
 			value:    List{Record{}},
-			wantCode: "L403",
-			wantMsg:  "invalid value",
-			wantHint: "use only scalars as list elements",
-		},
-		{
-			name:     "l403_collection_inside_list",
-			src:      baseSrc,
-			path:     "list",
-			value:    List{Collection{Elems: []Elem{{Label: "a", Body: Record{}}}}},
 			wantCode: "L403",
 			wantMsg:  "invalid value",
 			wantHint: "use only scalars as list elements",
@@ -1151,6 +1132,15 @@ service "web" {
 			wantHint: "rename keys that start with $",
 		},
 		{
+			name:     "l403_dollar_label_in_path",
+			src:      baseSrc,
+			path:     "service/\"$admin\"",
+			value:    Record{Fields: []Field{{Key: "enabled", Value: Bool(true)}}},
+			wantCode: "L403",
+			wantMsg:  "invalid value",
+			wantHint: "rename keys that start with $",
+		},
+		{
 			name:     "l403_repeated_key",
 			src:      baseSrc,
 			path:     "rec",
@@ -1158,33 +1148,6 @@ service "web" {
 			wantCode: "L403",
 			wantMsg:  "invalid value",
 			wantHint: "remove the duplicate key",
-		},
-		{
-			name:     "l403_empty_collection",
-			src:      baseSrc,
-			path:     "coll",
-			value:    Collection{Elems: nil},
-			wantCode: "L403",
-			wantMsg:  "invalid value",
-			wantHint: "write at least one collection element",
-		},
-		{
-			name:     "l403_repeated_label",
-			src:      baseSrc,
-			path:     "coll",
-			value:    Collection{Elems: []Elem{{Label: "dup", Body: Record{}}, {Label: "dup", Body: Record{}}}},
-			wantCode: "L403",
-			wantMsg:  "invalid value",
-			wantHint: "remove the duplicate label",
-		},
-		{
-			name:     "l403_non_record_at_element_path",
-			src:      baseSrc,
-			path:     "service/newelem",
-			value:    Int(1),
-			wantCode: "L403",
-			wantMsg:  "invalid value",
-			wantHint: "use a record for a collection element",
 		},
 	}
 
@@ -1591,33 +1554,11 @@ func TestParseValue(t *testing.T) {
 			}},
 		},
 		{
-			name: "collection_comma_separated",
-			src:  `"a" { x = 1 }, "b" {}`,
-			want: Collection{Elems: []Elem{
-				{Label: "a", Body: Record{Fields: []Field{{Key: "x", Value: Int(1)}}}},
-				{Label: "b", Body: Record{}},
-			}},
-		},
-		{
-			name: "collection_newline_separated",
-			src:  "\"a\" { x = 1 }\n\"b\" {}",
-			want: Collection{Elems: []Elem{
-				{Label: "a", Body: Record{Fields: []Field{{Key: "x", Value: Int(1)}}}},
-				{Label: "b", Body: Record{}},
-			}},
-		},
-		{
-			name: "collection_trailing_comma",
-			src:  `"a" {},`,
-			want: Collection{Elems: []Elem{
-				{Label: "a", Body: Record{}},
-			}},
-		},
-		{
-			name: "collection_trailing_blank_and_comment_lines",
-			src:  "\"a\" {}\n\n### trailing comment\n",
-			want: Collection{Elems: []Elem{
-				{Label: "a", Body: Record{}},
+			name: "record_with_labeled_entries",
+			src:  "{ a \"x\" { y = 1 }, env \"LOG_LEVEL\" = \"info\" }",
+			want: Record{Fields: []Field{
+				{Key: "a", Value: Record{Fields: []Field{{Key: "x", Value: Record{Fields: []Field{{Key: "y", Value: Int(1)}}}}}}},
+				{Key: "env", Value: Record{Fields: []Field{{Key: "LOG_LEVEL", Value: String("info")}}}},
 			}},
 		},
 		{
@@ -1689,17 +1630,10 @@ func TestParseValue(t *testing.T) {
 			wantHint: "use one type for all elements",
 		},
 		{
-			name:     "duplicate_label_in_collection",
-			src:      "\"a\" {}\n\"a\" {}",
+			name:     "duplicate_label_in_record",
+			src:      "{ a \"x\" {}\n  a \"x\" {} }",
 			wantCode: "L201",
-			wantTag:  "L201 2:1",
-			wantHint: "remove one of them",
-		},
-		{
-			name:     "duplicate_label_in_comma_separated_collection",
-			src:      `"a" { x = 1 }, "a" { x = 2 }`,
-			wantCode: "L201",
-			wantTag:  "L201 1:16",
+			wantTag:  "L201 2:5",
 			wantHint: "remove one of them",
 		},
 		{
@@ -1724,8 +1658,8 @@ func TestParseValue(t *testing.T) {
 			wantHint: "rename the key",
 		},
 		{
-			name:     "collection_missing_separator_two_blocks",
-			src:      `"a" {} "b" {}`,
+			name:     "record_missing_separator_two_blocks",
+			src:      `{ a {} b {} }`,
 			wantCode: "L106",
 			wantTag:  "L106 1:8",
 			wantHint: "separate entries with a newline or a comma",
@@ -2105,24 +2039,6 @@ func TestSetErrorOrder(t *testing.T) {
 			wantMsg:  "invalid value",
 			wantHint: "use a non-nil value",
 		},
-		{
-			name:     "collection_element_path_list_nil",
-			src:      string(specData),
-			path:     "service/new",
-			value:    List{nil},
-			wantCode: "L403",
-			wantMsg:  "invalid value",
-			wantHint: "use a record for a collection element",
-		},
-		{
-			name:     "collection_element_path_collection_empty",
-			src:      string(specData),
-			path:     "service/new",
-			value:    Collection{},
-			wantCode: "L403",
-			wantMsg:  "invalid value",
-			wantHint: "use a record for a collection element",
-		},
 	}
 
 	for _, tc := range tests {
@@ -2245,7 +2161,7 @@ func TestPathEmptySegmentMissing(t *testing.T) {
 			name: "Set",
 			op: func(t *testing.T, f *File) error {
 				t.Helper()
-				return f.Set(missingPath, Int(1))
+				return f.Set("a/\"\"", Int(1))
 			},
 		},
 		{
@@ -2631,18 +2547,6 @@ func TestSetL403Order(t *testing.T) {
 			wantCode: "L403",
 			wantMsg:  "invalid value",
 			wantHint: "remove the duplicate key",
-		},
-		{
-			name: "collection_duplicate_label_precedes_body_validation",
-			src:  "@lkal \"0.1\"\n",
-			path: "coll",
-			value: Collection{Elems: []Elem{
-				{Label: "x", Body: Record{Fields: []Field{{Key: "a", Value: Decimal("1.")}}}},
-				{Label: "x", Body: Record{}},
-			}},
-			wantCode: "L403",
-			wantMsg:  "invalid value",
-			wantHint: "remove the duplicate label",
 		},
 	}
 

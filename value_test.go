@@ -41,7 +41,6 @@ func valueBuildRecordAllTypes() Record {
 			{Key: "ref", Value: Ref{"sys", "clock"}},
 			{Key: "list", Value: List{Int(1), Int(2)}},
 			{Key: "rec", Value: Record{Fields: []Field{{Key: "inner", Value: String("ok")}}}},
-			{Key: "coll", Value: Collection{Elems: []Elem{{Label: "c1", Body: Record{Fields: []Field{{Key: "flag", Value: Bool(true)}}}}}}},
 		},
 	}
 }
@@ -67,16 +66,12 @@ func TestEqual_Nil(t *testing.T) {
 		{name: "list_and_nil", a: List{Int(1)}, b: nil, want: false},
 		{name: "nil_and_record", a: nil, b: Record{}, want: false},
 		{name: "record_and_nil", a: Record{}, b: nil, want: false},
-		{name: "nil_and_collection", a: nil, b: Collection{}, want: false},
-		{name: "collection_and_nil", a: Collection{}, b: nil, want: false},
 		{name: "nil_and_nil_ref", a: nil, b: Ref(nil), want: false},
 		{name: "nil_ref_and_nil", a: Ref(nil), b: nil, want: false},
 		{name: "nil_and_nil_list", a: nil, b: List(nil), want: false},
 		{name: "nil_list_and_nil", a: List(nil), b: nil, want: false},
 		{name: "nil_and_nil_record_fields", a: nil, b: Record{Fields: nil}, want: false},
 		{name: "nil_record_fields_and_nil", a: Record{Fields: nil}, b: nil, want: false},
-		{name: "nil_and_nil_collection_elems", a: nil, b: Collection{Elems: nil}, want: false},
-		{name: "nil_collection_elems_and_nil", a: Collection{Elems: nil}, b: nil, want: false},
 	}
 	valueRunTests(t, tests)
 }
@@ -88,8 +83,6 @@ func TestEqual_TypeMismatch(t *testing.T) {
 		{name: "int_vs_decimal_same_text", a: Int(1), b: Decimal("1"), want: false},
 		{name: "string_vs_enum", a: String("a"), b: Enum("a"), want: false},
 		{name: "enum_vs_string", a: Enum("a"), b: String("a"), want: false},
-		{name: "record_vs_collection", a: Record{}, b: Collection{}, want: false},
-		{name: "collection_vs_record", a: Collection{}, b: Record{}, want: false},
 		{name: "string_vs_int", a: String("1"), b: Int(1), want: false},
 		{name: "string_vs_bool", a: String("true"), b: Bool(true), want: false},
 		{name: "string_vs_quantity", a: String("512Mi"), b: Quantity{Number: "512", Unit: "Mi"}, want: false},
@@ -97,7 +90,6 @@ func TestEqual_TypeMismatch(t *testing.T) {
 		{name: "ref_vs_list", a: Ref{"a"}, b: List{String("a")}, want: false},
 		{name: "list_vs_ref", a: List{String("a")}, b: Ref{"a"}, want: false},
 		{name: "list_vs_record", a: List{}, b: Record{}, want: false},
-		{name: "list_vs_collection", a: List{}, b: Collection{}, want: false},
 		{name: "quantity_vs_int", a: Quantity{Number: "1", Unit: "m"}, b: Int(1), want: false},
 		{name: "quantity_vs_decimal", a: Quantity{Number: "1.0", Unit: "m"}, b: Decimal("1.0"), want: false},
 		{name: "bool_vs_int", a: Bool(true), b: Int(1), want: false},
@@ -115,7 +107,6 @@ func TestEqual_TypeMismatch(t *testing.T) {
 		{name: "ref", val: Ref{"sample"}},
 		{name: "list", val: List{Int(42)}},
 		{name: "record", val: Record{Fields: []Field{{Key: "k", Value: Int(42)}}}},
-		{name: "collection", val: Collection{Elems: []Elem{{Label: "k", Body: Record{Fields: []Field{{Key: "k", Value: Int(42)}}}}}}},
 	}
 
 	for i := 0; i < len(samples); i++ {
@@ -374,92 +365,6 @@ func TestEqual_Record(t *testing.T) {
 	valueRunTests(t, tests)
 }
 
-func TestEqual_Collection(t *testing.T) {
-	recWeb := Record{Fields: []Field{{Key: "port", Value: Int(80)}}}
-	recDB := Record{Fields: []Field{{Key: "port", Value: Int(5432)}}}
-	recMetrics := Record{Fields: []Field{{Key: "port", Value: Int(9090)}}}
-
-	tests := []valueTestCase{
-		{name: "collection_empty_and_empty", a: Collection{}, b: Collection{}, want: true},
-		{name: "collection_nil_elems_and_nil_elems", a: Collection{Elems: nil}, b: Collection{Elems: nil}, want: true},
-		{name: "collection_empty_elems_and_nil_elems", a: Collection{Elems: []Elem{}}, b: Collection{Elems: nil}, want: true},
-		{name: "collection_nil_elems_and_empty_elems", a: Collection{Elems: nil}, b: Collection{Elems: []Elem{}}, want: true},
-		{
-			name: "collection_single_elem_identical",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}}},
-			b:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}}},
-			want: true,
-		},
-		{
-			name: "collection_two_elems_same_order",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}, {Label: "db", Body: recDB}}},
-			b:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}, {Label: "db", Body: recDB}}},
-			want: true,
-		},
-		{
-			name: "collection_two_elems_scrambled_order",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}, {Label: "db", Body: recDB}}},
-			b:    Collection{Elems: []Elem{{Label: "db", Body: recDB}, {Label: "web", Body: recWeb}}},
-			want: true,
-		},
-		{
-			name: "collection_three_elems_scrambled_order",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}, {Label: "db", Body: recDB}, {Label: "metrics", Body: recMetrics}}},
-			b:    Collection{Elems: []Elem{{Label: "metrics", Body: recMetrics}, {Label: "web", Body: recWeb}, {Label: "db", Body: recDB}}},
-			want: true,
-		},
-		{
-			name: "collection_scrambled_elems_and_scrambled_body_fields",
-			a: Collection{Elems: []Elem{
-				{Label: "web", Body: Record{Fields: []Field{{Key: "p", Value: Int(80)}, {Key: "proto", Value: Enum("tcp")}}}},
-				{Label: "db", Body: Record{Fields: []Field{{Key: "host", Value: String("localhost")}, {Key: "port", Value: Int(5432)}}}},
-			}},
-			b: Collection{Elems: []Elem{
-				{Label: "db", Body: Record{Fields: []Field{{Key: "port", Value: Int(5432)}, {Key: "host", Value: String("localhost")}}}},
-				{Label: "web", Body: Record{Fields: []Field{{Key: "proto", Value: Enum("tcp")}, {Key: "p", Value: Int(80)}}}},
-			}},
-			want: true,
-		},
-		{
-			name: "collection_diff_body_value",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}}},
-			b:    Collection{Elems: []Elem{{Label: "web", Body: Record{Fields: []Field{{Key: "port", Value: Int(8080)}}}}}},
-			want: false,
-		},
-		{
-			name: "collection_diff_label",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}}},
-			b:    Collection{Elems: []Elem{{Label: "api", Body: recWeb}}},
-			want: false,
-		},
-		{
-			name: "collection_label_case_sensitive",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}}},
-			b:    Collection{Elems: []Elem{{Label: "Web", Body: recWeb}}},
-			want: false,
-		},
-		{
-			name: "collection_missing_elem",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}}},
-			b:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}, {Label: "db", Body: recDB}}},
-			want: false,
-		},
-		{
-			name: "collection_extra_elem",
-			a:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}, {Label: "db", Body: recDB}}},
-			b:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}}},
-			want: false,
-		},
-		{
-			name: "collection_empty_vs_nonempty",
-			a:    Collection{},
-			b:    Collection{Elems: []Elem{{Label: "web", Body: recWeb}}},
-			want: false,
-		},
-	}
-	valueRunTests(t, tests)
-}
-
 func TestEqual_Nested(t *testing.T) {
 	tests := []valueTestCase{
 		{
@@ -487,28 +392,28 @@ func TestEqual_Nested(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "nested_multi_level_collection_and_record",
-			a: Collection{Elems: []Elem{
+			name: "nested_multi_level_records",
+			a: Record{Fields: []Field{
 				{
-					Label: "service",
-					Body: Record{Fields: []Field{
+					Key: "service",
+					Value: Record{Fields: []Field{
 						{
 							Key: "containers",
-							Value: Collection{Elems: []Elem{
-								{Label: "app", Body: Record{Fields: []Field{{Key: "image", Value: String("web:1.0")}, {Key: "port", Value: Int(80)}}}},
+							Value: Record{Fields: []Field{
+								{Key: "app", Value: Record{Fields: []Field{{Key: "image", Value: String("web:1.0")}, {Key: "port", Value: Int(80)}}}},
 							}},
 						},
 					}},
 				},
 			}},
-			b: Collection{Elems: []Elem{
+			b: Record{Fields: []Field{
 				{
-					Label: "service",
-					Body: Record{Fields: []Field{
+					Key: "service",
+					Value: Record{Fields: []Field{
 						{
 							Key: "containers",
-							Value: Collection{Elems: []Elem{
-								{Label: "app", Body: Record{Fields: []Field{{Key: "port", Value: Int(80)}, {Key: "image", Value: String("web:1.0")}}}},
+							Value: Record{Fields: []Field{
+								{Key: "app", Value: Record{Fields: []Field{{Key: "port", Value: Int(80)}, {Key: "image", Value: String("web:1.0")}}}},
 							}},
 						},
 					}},
@@ -577,7 +482,6 @@ func TestEqual_Nested(t *testing.T) {
 			a:    valueBuildRecordAllTypes(),
 			b: Record{
 				Fields: []Field{
-					{Key: "coll", Value: Collection{Elems: []Elem{{Label: "c1", Body: Record{Fields: []Field{{Key: "flag", Value: Bool(true)}}}}}}},
 					{Key: "rec", Value: Record{Fields: []Field{{Key: "inner", Value: String("ok")}}}},
 					{Key: "list", Value: List{Int(1), Int(2)}},
 					{Key: "ref", Value: Ref{"sys", "clock"}},
@@ -605,7 +509,6 @@ func TestEqual_Nested(t *testing.T) {
 					{Key: "ref", Value: Ref{"sys", "clock"}},
 					{Key: "list", Value: List{Int(1), Int(2)}},
 					{Key: "rec", Value: Record{Fields: []Field{{Key: "inner", Value: String("ok")}}}},
-					{Key: "coll", Value: Collection{Elems: []Elem{{Label: "c1", Body: Record{Fields: []Field{{Key: "flag", Value: Bool(true)}}}}}}},
 				},
 			},
 			want: false,
@@ -624,7 +527,6 @@ func TestEqual_Nested(t *testing.T) {
 					{Key: "ref", Value: Ref{"sys", "clock"}},
 					{Key: "list", Value: List{Int(1), Int(2)}},
 					{Key: "rec", Value: Record{Fields: []Field{{Key: "inner", Value: String("ok")}}}},
-					{Key: "coll", Value: Collection{Elems: []Elem{{Label: "c1", Body: Record{Fields: []Field{{Key: "flag", Value: Bool(true)}}}}}}},
 				},
 			},
 			want: false,
@@ -643,7 +545,6 @@ func TestEqual_Nested(t *testing.T) {
 					{Key: "ref", Value: Ref{"Sys", "clock"}},
 					{Key: "list", Value: List{Int(1), Int(2)}},
 					{Key: "rec", Value: Record{Fields: []Field{{Key: "inner", Value: String("ok")}}}},
-					{Key: "coll", Value: Collection{Elems: []Elem{{Label: "c1", Body: Record{Fields: []Field{{Key: "flag", Value: Bool(true)}}}}}}},
 				},
 			},
 			want: false,
@@ -662,7 +563,6 @@ func TestEqual_Nested(t *testing.T) {
 					{Key: "ref", Value: Ref{"sys", "clock"}},
 					{Key: "list", Value: List{Int(2), Int(1)}},
 					{Key: "rec", Value: Record{Fields: []Field{{Key: "inner", Value: String("ok")}}}},
-					{Key: "coll", Value: Collection{Elems: []Elem{{Label: "c1", Body: Record{Fields: []Field{{Key: "flag", Value: Bool(true)}}}}}}},
 				},
 			},
 			want: false,
@@ -674,8 +574,6 @@ func TestEqual_Nested(t *testing.T) {
 func TestEqual_SymmetryAndReflexivity(t *testing.T) {
 	rec1 := Record{Fields: []Field{{Key: "a", Value: Int(1)}, {Key: "b", Value: Int(2)}}}
 	rec2 := Record{Fields: []Field{{Key: "b", Value: Int(2)}, {Key: "a", Value: Int(1)}}}
-	coll1 := Collection{Elems: []Elem{{Label: "web", Body: rec1}, {Label: "db", Body: Record{}}}}
-	coll2 := Collection{Elems: []Elem{{Label: "db", Body: Record{}}, {Label: "web", Body: rec2}}}
 
 	samples := []Value{
 		nil,
@@ -701,9 +599,6 @@ func TestEqual_SymmetryAndReflexivity(t *testing.T) {
 		Record{},
 		Record{Fields: nil},
 		rec1,
-		Collection{},
-		Collection{Elems: nil},
-		coll1,
 	}
 
 	for i, v := range samples {
@@ -727,9 +622,7 @@ func TestEqual_SymmetryAndReflexivity(t *testing.T) {
 		{List{}, List(nil)},
 		{Ref{}, Ref(nil)},
 		{Record{Fields: []Field{}}, Record{Fields: nil}},
-		{Collection{Elems: []Elem{}}, Collection{Elems: nil}},
 		{rec1, rec2},
-		{coll1, coll2},
 	}
 	for i, pair := range equivalentPairs {
 		ab := Equal(pair[0], pair[1])
@@ -782,10 +675,6 @@ func TestEqual_NoPanic(t *testing.T) {
 		Record{Fields: []Field{{Key: "a", Value: nil}}},
 		Record{Fields: []Field{{Key: "a", Value: Int(1)}}},
 		Record{Fields: []Field{{Key: "a", Value: Int(1)}, {Key: "a", Value: Int(2)}}},
-		Collection{Elems: nil},
-		Collection{Elems: []Elem{}},
-		Collection{Elems: []Elem{{Label: "x", Body: Record{}}}},
-		Collection{Elems: []Elem{{Label: "x", Body: Record{}}, {Label: "x", Body: Record{}}}},
 	}
 
 	for i := 0; i < len(values); i++ {

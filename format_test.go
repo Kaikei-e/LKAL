@@ -661,7 +661,7 @@ func TestFormatValue(t *testing.T) {
 			want: []byte("{}"),
 		},
 		{
-			name: "RecordWithNestedAndCollection",
+			name: "RecordWithNested",
 			val: Record{
 				Fields: []Field{
 					{Key: "scalar", Value: Int(1)},
@@ -675,11 +675,11 @@ func TestFormatValue(t *testing.T) {
 					},
 					{
 						Key: "service",
-						Value: Collection{
-							Elems: []Elem{
+						Value: Record{
+							Fields: []Field{
 								{
-									Label: "web",
-									Body: Record{
+									Key: "web",
+									Value: Record{
 										Fields: []Field{
 											{Key: "port", Value: Int(8080)},
 										},
@@ -690,27 +690,27 @@ func TestFormatValue(t *testing.T) {
 					},
 				},
 			},
-			want: []byte("{\n  scalar = 1\n  nested {\n    x = \"ok\"\n  }\n  service \"web\" {\n    port = 8080\n  }\n}"),
+			want: []byte("{\n  scalar = 1\n  nested {\n    x = \"ok\"\n  }\n  service {\n    web {\n      port = 8080\n    }\n  }\n}"),
 		},
 		{
-			name: "CollectionWithTwoElementsOneEmpty",
-			val: Collection{
-				Elems: []Elem{
+			name: "RecordWithTwoNestedOneEmpty",
+			val: Record{
+				Fields: []Field{
 					{
-						Label: "first",
-						Body: Record{
+						Key: "first",
+						Value: Record{
 							Fields: []Field{
 								{Key: "x", Value: Int(1)},
 							},
 						},
 					},
 					{
-						Label: "second",
-						Body:  Record{},
+						Key:   "second",
+						Value: Record{},
 					},
 				},
 			},
-			want: []byte("\"first\" {\n  x = 1\n}\n\"second\" {}"),
+			want: []byte("{\n  first {\n    x = 1\n  }\n  second {}\n}"),
 		},
 		{
 			name: "RecordWithRawCandidateString",
@@ -729,36 +729,6 @@ func TestFormatValue(t *testing.T) {
 				},
 			},
 			want: []byte("{\n  items = [1, 2]\n}"),
-		},
-		{
-			name: "NestedCollectionInsideElementBody",
-			val: Collection{
-				Elems: []Elem{
-					{
-						Label: "service",
-						Body: Record{
-							Fields: []Field{
-								{
-									Key: "port",
-									Value: Collection{
-										Elems: []Elem{
-											{
-												Label: "http",
-												Body: Record{
-													Fields: []Field{
-														{Key: "number", Value: Int(8080)},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			want: []byte("\"service\" {\n  port \"http\" {\n    number = 8080\n  }\n}"),
 		},
 		{
 			name: "DecimalStoredText",
@@ -1035,8 +1005,8 @@ func TestFormatDeepNesting(t *testing.T) {
 			src:  "@lkal \"0.1\"\n" + strings.Repeat("a { ", 1000) + "x = 1" + strings.Repeat(" }", 1000) + "\n",
 		},
 		{
-			name: "1000_nested_elements",
-			src:  "@lkal \"0.1\"\n" + strings.Repeat("a \"l\" { ", 1000) + "x = 1" + strings.Repeat(" }", 1000) + "\n",
+			name: "500_nested_labeled_blocks",
+			src:  "@lkal \"0.1\"\n" + strings.Repeat("a \"l\" { ", 500) + "x = 1" + strings.Repeat(" }", 500) + "\n",
 		},
 	}
 
@@ -1083,3 +1053,28 @@ func TestFormatDeepNesting(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatLabeledEntries(t *testing.T) {
+	src := `@lkal "0.1"
+
+route   "GET"   "/users"  { handler = "list", auth = true }
+env  "LOG_LEVEL"   =   "info"
+block { env "DEBUG" = "1" }
+`
+	want := `@lkal "0.1"
+
+route "GET" "/users" { handler = "list", auth = true }
+env "LOG_LEVEL" = "info"
+block {
+  env "DEBUG" = "1"
+}
+`
+	got, err := Format([]byte(src))
+	if err != nil {
+		t.Fatalf("Format failed: %v", err)
+	}
+	if string(got) != want {
+		t.Errorf("Format mismatch:\ngot:\n%s\nwant:\n%s", string(got), want)
+	}
+}
+

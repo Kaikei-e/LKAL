@@ -2,9 +2,7 @@
   "$lkal": "0.1",
   "d": {},
   "c": {
-    "$coll": {
-      "x": {}
-    }
+    "x": {}
   },
   "pkg": {
     "true": "reserved",
@@ -12,10 +10,8 @@
     "script": "echo start\necho end"
   },
   "service": {
-    "$coll": {
-      "api": {
-        "port": 80
-      }
+    "api": {
+      "port": 80
     }
   }
 }

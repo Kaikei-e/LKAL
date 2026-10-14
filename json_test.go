@@ -76,22 +76,6 @@ func jsonTCheckOrder(a, b Value) error {
 				return fmt.Errorf("field %q -> %w", va.Fields[i].Key, err)
 			}
 		}
-	case Collection:
-		vb, ok := b.(Collection)
-		if !ok {
-			return fmt.Errorf("type mismatch: %T vs %T", a, b)
-		}
-		if len(va.Elems) != len(vb.Elems) {
-			return fmt.Errorf("collection elem count: got %d, want %d", len(va.Elems), len(vb.Elems))
-		}
-		for i := range va.Elems {
-			if va.Elems[i].Label != vb.Elems[i].Label {
-				return fmt.Errorf("elem %d label: got %q, want %q", i, va.Elems[i].Label, vb.Elems[i].Label)
-			}
-			if err := jsonTCheckOrder(va.Elems[i].Body, vb.Elems[i].Body); err != nil {
-				return fmt.Errorf("elem %q -> %w", va.Elems[i].Label, err)
-			}
-		}
 	case List:
 		vb, ok := b.(List)
 		if !ok {
@@ -144,7 +128,7 @@ func TestToJSONLayout(t *testing.T) {
 		{
 			name: "contract_f_example",
 			src:  "@lkal \"0.1\"\na = 1\nb = [1, 2]\nc \"x\" {}\nd {}\n",
-			want: "{\n  \"$lkal\": \"0.1\",\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ],\n  \"c\": {\n    \"$coll\": {\n      \"x\": {}\n    }\n  },\n  \"d\": {}\n}\n",
+			want: "{\n  \"$lkal\": \"0.1\",\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ],\n  \"c\": {\n    \"x\": {}\n  },\n  \"d\": {}\n}\n",
 		},
 		{
 			name: "empty_body",
@@ -169,7 +153,7 @@ func TestToJSONLayout(t *testing.T) {
 		{
 			name: "escaping_in_keys_and_labels",
 			src:  "@lkal \"0.1\"\n\"k\\\"ey\\n\" = 1\ncoll \"l\\\"abel\\n\" {\n  x = 2\n}\n",
-			want: "{\n  \"$lkal\": \"0.1\",\n  \"k\\\"ey\\n\": 1,\n  \"coll\": {\n    \"$coll\": {\n      \"l\\\"abel\\n\": {\n        \"x\": 2\n      }\n    }\n  }\n}\n",
+			want: "{\n  \"$lkal\": \"0.1\",\n  \"k\\\"ey\\n\": 1,\n  \"coll\": {\n    \"l\\\"abel\\n\": {\n      \"x\": 2\n    }\n  }\n}\n",
 		},
 		{
 			name: "tag_object_spans_three_lines",
@@ -317,9 +301,9 @@ func TestToJSONValues(t *testing.T) {
 			wantJSON: "{\n  \"$lkal\": \"0.1\",\n  \"sub\": {\n    \"leaf\": \"ok\"\n  }\n}\n",
 		},
 		{
-			name:     "collection",
+			name:     "labeled_block",
 			src:      "@lkal \"0.1\"\nport \"http\" {\n  number = 80\n}\n",
-			wantJSON: "{\n  \"$lkal\": \"0.1\",\n  \"port\": {\n    \"$coll\": {\n      \"http\": {\n        \"number\": 80\n      }\n    }\n  }\n}\n",
+			wantJSON: "{\n  \"$lkal\": \"0.1\",\n  \"port\": {\n    \"http\": {\n      \"number\": 80\n    }\n  }\n}\n",
 		},
 	}
 
@@ -416,8 +400,8 @@ func TestToJSONDeepDocuments(t *testing.T) {
 			src:  "@lkal \"0.1\"\n" + strings.Repeat("a {\n", 1000) + "x = 1\n" + strings.Repeat("}\n", 1000),
 		},
 		{
-			name: "element_1000_levels",
-			src:  "@lkal \"0.1\"\n" + strings.Repeat("c \"l\" {\n", 1000) + "x = 1\n" + strings.Repeat("}\n", 1000),
+			name: "labeled_500_blocks_1000_levels",
+			src:  "@lkal \"0.1\"\n" + strings.Repeat("c \"l\" {\n", 500) + "x = 1\n" + strings.Repeat("}\n", 500),
 		},
 	}
 
@@ -547,30 +531,6 @@ func TestFromJSONValid(t *testing.T) {
 			},
 		},
 		{
-			name:        "collection_with_dollar_label",
-			input:       `{"$lkal": "0.1", "c": {"$coll": {"$special": {"v": 1}}}}`,
-			wantVersion: "0.1",
-			wantRecord: Record{
-				Fields: []Field{
-					{
-						Key: "c",
-						Value: Collection{
-							Elems: []Elem{
-								{
-									Label: "$special",
-									Body: Record{
-										Fields: []Field{
-											{Key: "v", Value: Int(1)},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		{
 			name:        "list_of_enums",
 			input:       `{"$lkal": "0.1", "enums": [{"$enum": "tcp"}, {"$enum": "udp"}]}`,
 			wantVersion: "0.1",
@@ -611,26 +571,26 @@ func TestFromJSONValid(t *testing.T) {
 			},
 		},
 		{
-			name:        "nested_collections",
-			input:       `{"$lkal": "0.1", "outer": {"$coll": {"first": {"inner": {"$coll": {"nested": {"v": 10}}}}}}}`,
+			name:        "nested_records",
+			input:       `{"$lkal": "0.1", "outer": {"first": {"inner": {"nested": {"v": 10}}}}}`,
 			wantVersion: "0.1",
 			wantRecord: Record{
 				Fields: []Field{
 					{
 						Key: "outer",
-						Value: Collection{
-							Elems: []Elem{
+						Value: Record{
+							Fields: []Field{
 								{
-									Label: "first",
-									Body: Record{
+									Key: "first",
+									Value: Record{
 										Fields: []Field{
 											{
 												Key: "inner",
-												Value: Collection{
-													Elems: []Elem{
+												Value: Record{
+													Fields: []Field{
 														{
-															Label: "nested",
-															Body: Record{
+															Key: "nested",
+															Value: Record{
 																Fields: []Field{
 																	{Key: "v", Value: Int(10)},
 																},
@@ -809,9 +769,9 @@ func TestFromJSONErrors(t *testing.T) {
 			wantErrors: []string{"L302 1:33"},
 		},
 		{
-			name:       "L302_coll_member_null",
-			input:      `{"$lkal": "0.1", "c": {"$coll": {"x": null}}}`,
-			wantErrors: []string{"L302 1:39"},
+			name:       "L302_nested_member_null",
+			input:      `{"$lkal": "0.1", "c": {"x": null}}`,
+			wantErrors: []string{"L302 1:29"},
 		},
 		{
 			name:       "L303_exp_lowercase",
@@ -846,11 +806,6 @@ func TestFromJSONErrors(t *testing.T) {
 		{
 			name:       "L304_empty_object_in_list",
 			input:      `{"$lkal": "0.1", "a": [{}]}`,
-			wantErrors: []string{"L304 1:24"},
-		},
-		{
-			name:       "L304_coll_object_in_list",
-			input:      `{"$lkal": "0.1", "a": [{"$coll": {"x": {}}}]}`,
 			wantErrors: []string{"L304 1:24"},
 		},
 		{
@@ -949,24 +904,9 @@ func TestFromJSONErrors(t *testing.T) {
 			wantErrors: []string{"L305 1:33"},
 		},
 		{
-			name:       "L305_coll_payload_not_object",
-			input:      `{"$lkal": "0.1", "c": {"$coll": []}}`,
-			wantErrors: []string{"L305 1:33"},
-		},
-		{
-			name:       "L305_coll_empty",
-			input:      `{"$lkal": "0.1", "c": {"$coll": {}}}`,
-			wantErrors: []string{"L305 1:33"},
-		},
-		{
-			name:       "L305_coll_member_not_object",
-			input:      `{"$lkal": "0.1", "c": {"$coll": {"x": 1}}}`,
-			wantErrors: []string{"L305 1:39"},
-		},
-		{
-			name:       "L305_coll_member_tag_object",
-			input:      `{"$lkal": "0.1", "c": {"$coll": {"x": {"$enum": "tcp"}}}}`,
-			wantErrors: []string{"L305 1:39"},
+			name:       "L205_dollar_coll_key",
+			input:      `{"$lkal": "0.1", "c": {"$coll": {"x": {}}}}`,
+			wantErrors: []string{"L205 1:24"},
 		},
 		{
 			name:       "L005_int64_overflow",
@@ -1044,9 +984,9 @@ func TestFromJSONErrors(t *testing.T) {
 			wantErrors: []string{"L201 1:26"},
 		},
 		{
-			name:       "L201_duplicate_label_in_coll",
-			input:      `{"$lkal": "0.1", "c": {"$coll": {"x": {}, "x": {}}}}`,
-			wantErrors: []string{"L201 1:43"},
+			name:       "L201_duplicate_nested_key",
+			input:      `{"$lkal": "0.1", "c": {"x": {}, "x": {}}}`,
+			wantErrors: []string{"L201 1:33"},
 		},
 		{
 			name:       "L204_mixed_list",
@@ -1099,9 +1039,9 @@ func TestFromJSONErrors(t *testing.T) {
 			wantErrors: []string{"L205 1:18", "L205 1:27"},
 		},
 		{
-			name:       "L205_coll_member_nested_schema_key",
-			input:      `{"$lkal": "0.1", "c": {"$coll": {"x": {"$schema": 1}}}}`,
-			wantErrors: []string{"L205 1:40"},
+			name:       "L205_nested_member_schema_key",
+			input:      `{"$lkal": "0.1", "c": {"x": {"$schema": 1}}}`,
+			wantErrors: []string{"L205 1:30"},
 		},
 		{
 			name:       "several_errors_in_order",
@@ -1229,9 +1169,9 @@ func TestFromJSONErrors(t *testing.T) {
 			wantErrors: []string{"L105 1:11"},
 		},
 		{
-			name:       "L302_coll_nested_null_members",
-			input:      `{"$lkal":"0.1","c":{"$coll":{"e1":{"x":null,"y":null},"e2":{"z":null}}}}`,
-			wantErrors: []string{"L302 1:40", "L302 1:49", "L302 1:65"},
+			name:       "L302_nested_null_members",
+			input:      `{"$lkal":"0.1","c":{"e1":{"x":null,"y":null},"e2":{"z":null}}}`,
+			wantErrors: []string{"L302 1:31", "L302 1:40", "L302 1:56"},
 		},
 		{
 			name:       "L305_L301_enum_array_with_syntax_error",
@@ -1274,40 +1214,10 @@ func TestFromJSONErrors(t *testing.T) {
 			wantErrors: []string{"L301 1:29"},
 		},
 		{
-			name:       "amendment4_coll_partial_boolean",
-			input:      `{"$lkal":"0.1","c":{"$coll":tru}}`,
-			wantErrors: []string{"L301 1:32"},
-		},
-		{
-			name:       "amendment4_coll_member_unclosed_string",
-			input:      `{"$lkal":"0.1","c":{"$coll":{"x":"abc}}}`,
-			wantErrors: []string{"L301 1:41"},
-		},
-		{
-			name:       "amendment4_coll_record_error_allows_second_key",
-			input:      `{"$lkal":"0.1","c":{"$coll":{"x":{"k":null}},"y":1}}`,
-			wantErrors: []string{"L302 1:39", "L305 1:46"},
-		},
-		{
 			name:       "amendment5_max_depth_key_syntax_error",
 			input:      `{"$lkal":"0.1","max depth":tru}`,
 			wantErrors: []string{"L301 1:31"},
 			wantHint:   "fix the JSON syntax",
-		},
-		{
-			name:       "amendment5_coll_member_error_null",
-			input:      `{"$lkal":"0.1","c":{"$coll":{"a":1,"b":{"k":null}}}}`,
-			wantErrors: []string{"L305 1:34", "L302 1:45"},
-		},
-		{
-			name:       "amendment5_coll_member_error_duplicate_label",
-			input:      `{"$lkal":"0.1","c":{"$coll":{"a":1,"a":{}}}}`,
-			wantErrors: []string{"L305 1:34", "L201 1:36"},
-		},
-		{
-			name:       "amendment5_coll_member_error_dollar_key",
-			input:      `{"$lkal":"0.1","c":{"$coll":{"a":{"$enum":"x"},"b":{"$k":1}}}}`,
-			wantErrors: []string{"L305 1:34", "L205 1:53"},
 		},
 	}
 
@@ -1468,13 +1378,6 @@ func TestFromJSONErrorDetails(t *testing.T) {
 			wantCode: "L305",
 			wantMsg:  "malformed tag",
 			wantHint: `write the reference as a string, for example {"$ref": "secret/db-creds"}`,
-		},
-		{
-			name:     "L305_coll_hint",
-			input:    `{"$lkal": "0.1", "c": {"$coll": {}}}`,
-			wantCode: "L305",
-			wantMsg:  "malformed tag",
-			wantHint: `write {"$coll": {"label": {...}}} with at least one element`,
 		},
 		{
 			name:     "L105_json_hint",
@@ -1648,15 +1551,12 @@ func TestFromJSONDepthLimit(t *testing.T) {
 
 func TestFromJSONNestingLimit(t *testing.T) {
 	const (
-		recPrefix  = `{"$lkal":"0.1",`
-		recUnit    = `"a":{`
-		elemPrefix = `{"$lkal":"0.1",`
-		elemUnit   = `"c":{"$coll":{"l":{`
-		hint1000   = "nest blocks at most 1000 levels deep"
+		recPrefix = `{"$lkal":"0.1",`
+		recUnit   = `"a":{`
+		hint1000  = "nest blocks at most 1000 levels deep"
 	)
 
 	recCol1001 := jsonTComputeBlockBraceCol(recPrefix, recUnit, 1001)
-	elemCol1001 := jsonTComputeBlockBraceCol(elemPrefix, elemUnit, 1001)
 
 	tests := []struct {
 		name     string
@@ -1677,14 +1577,6 @@ func TestFromJSONNestingLimit(t *testing.T) {
 			wantOK:   false,
 			wantCode: "L107",
 			wantCol:  recCol1001,
-			wantHint: hint1000,
-		},
-		{
-			name:     "elements_1001_levels_l107",
-			input:    elemPrefix + strings.Repeat(elemUnit, 1001) + strings.Repeat("}}}", 1001) + "}",
-			wantOK:   false,
-			wantCode: "L107",
-			wantCol:  elemCol1001,
 			wantHint: hint1000,
 		},
 	}
@@ -1930,7 +1822,7 @@ func FuzzFromJSON(f *testing.F) {
 		[]byte(`{"$lkal": "0.1", "str": "hello", "dec": 0.25, "b": true, "proto": {"$enum": "tcp"}, "mem": {"$qty": "512Mi"}, "ref": {"$ref": "secret/db-creds"}}`),
 		[]byte(`{"$lkal": "0.1", "list": [1, 2, 3]}`),
 		[]byte(`{"$lkal": "0.1", "rec": {"x": 1}}`),
-		[]byte(`{"$lkal": "0.1", "coll": {"$coll": {"elem": {"x": 1}}}}`),
+		[]byte(`{"$lkal": "0.1", "coll": {"elem": {"x": 1}}}`),
 		[]byte(``),
 		[]byte(`{}`),
 		[]byte(`{"a": 1}`),

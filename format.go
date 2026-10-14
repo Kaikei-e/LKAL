@@ -64,15 +64,6 @@ func FormatValue(v Value) []byte {
 		writeList(&b, len(val), func(i int) Value { return val[i] })
 	case Record:
 		writeBlock(&b, blockFromRecord(val), 0)
-	case Collection:
-		for i, elem := range val.Elems {
-			if i > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(quoteString(elem.Label))
-			b.WriteByte(' ')
-			writeBlock(&b, blockFromRecord(elem.Body), 0)
-		}
 	}
 	return b.Bytes()
 }
@@ -125,20 +116,28 @@ func writeComment(b *bytes.Buffer, indent, text string) {
 	b.WriteByte('\n')
 }
 
+func formatHeader(ent *entry) string {
+	var b strings.Builder
+	b.WriteString(formatKey(ent.key))
+	for _, lbl := range ent.labels {
+		b.WriteByte(' ')
+		b.WriteString(quoteString(lbl.text))
+	}
+	return b.String()
+}
+
 func formatEntry(b *bytes.Buffer, ent *entry, d int, indent, childIndent string) {
 	switch ent.kind {
 	case entryAssign:
 		formatAssign(b, ent, indent, childIndent)
 	case entryRecord:
-		formatBody(b, indent+formatKey(ent.key), ent.body, d)
-	case entryElem:
-		formatBody(b, indent+formatKey(ent.key)+" "+quoteString(ent.label), ent.body, d)
+		formatBody(b, indent+formatHeader(ent), ent.body, d)
 	}
 }
 
 func formatAssign(b *bytes.Buffer, ent *entry, indent, childIndent string) {
 	b.WriteString(indent)
-	b.WriteString(formatKey(ent.key))
+	b.WriteString(formatHeader(ent))
 	if s, ok := nodeString(ent.value); ok && isRawCandidate(s) {
 		b.WriteString(" =\n")
 		writeRawLines(b, s, childIndent)
@@ -231,7 +230,7 @@ func isOneLineBlock(b *block) bool {
 		return false
 	}
 	for _, e := range b.entries {
-		if e.kind != entryAssign || len(e.comments) > 0 || !isOneLineValue(e.value) {
+		if e.kind != entryAssign || len(e.labels) > 0 || len(e.comments) > 0 || !isOneLineValue(e.value) {
 			return false
 		}
 	}

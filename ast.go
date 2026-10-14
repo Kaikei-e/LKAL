@@ -21,8 +21,12 @@ type entryKind int
 const (
 	entryAssign entryKind = iota
 	entryRecord
-	entryElem
 )
+
+type labelSpan struct {
+	text string
+	pos  Pos
+}
 
 type entry struct {
 	kind        entryKind
@@ -30,8 +34,7 @@ type entry struct {
 	blankBefore bool
 	key         string
 	keyPos      Pos
-	label       string
-	labelPos    Pos
+	labels      []labelSpan
 	value       node
 	body        *block
 }

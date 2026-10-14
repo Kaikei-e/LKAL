@@ -114,22 +114,6 @@ func confDiffFieldOrder(a, b Value) string {
 				return fmt.Sprintf("field %q -> %s", va.Fields[i].Key, d)
 			}
 		}
-	case Collection:
-		vb, ok := b.(Collection)
-		if !ok {
-			return fmt.Sprintf("type mismatch: %T vs %T", a, b)
-		}
-		if len(va.Elems) != len(vb.Elems) {
-			return fmt.Sprintf("collection elem count: got %d, want %d", len(va.Elems), len(vb.Elems))
-		}
-		for i := range va.Elems {
-			if va.Elems[i].Label != vb.Elems[i].Label {
-				return fmt.Sprintf("elem %d label: got %q, want %q", i, va.Elems[i].Label, vb.Elems[i].Label)
-			}
-			if d := confDiffFieldOrder(va.Elems[i].Body, vb.Elems[i].Body); d != "" {
-				return fmt.Sprintf("elem %q -> %s", va.Elems[i].Label, d)
-			}
-		}
 	case List:
 		vb, ok := b.(List)
 		if !ok {

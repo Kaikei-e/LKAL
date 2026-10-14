@@ -12,40 +12,25 @@ func (f *File) Get(path string) (Value, error) {
 		return nil, pathError(f.name, "L401", "")
 	}
 
-	lastSeg := segs[len(segs)-1]
-	parent, failSeg, ok := resolveParent(f, segs[:len(segs)-1], lastSeg)
-	if !ok {
-		return nil, notFoundError(f.name, failSeg)
-	}
-
-	if parent.kind == parentCollection {
-		for _, e := range parent.block.entries {
-			if e.key == parent.collKey && e.label == lastSeg {
-				return buildRecord(e.body), nil
+	cur := Value(f.Data())
+	for _, seg := range segs {
+		rec, isRec := cur.(Record)
+		if !isRec {
+			return nil, notFoundError(f.name, seg)
+		}
+		found := false
+		for _, field := range rec.Fields {
+			if field.Key == seg {
+				cur = field.Value
+				found = true
+				break
 			}
 		}
-		return nil, notFoundError(f.name, lastSeg)
-	}
-
-	firstIdx, lastIdx := keyRange(parent.block, lastSeg)
-	if firstIdx == -1 {
-		return nil, notFoundError(f.name, lastSeg)
-	}
-
-	first := parent.block.entries[firstIdx]
-	switch first.kind {
-	case entryAssign:
-		return buildValue(first.value), nil
-	case entryRecord:
-		return buildRecord(first.body), nil
-	default:
-		matching := parent.block.entries[firstIdx : lastIdx+1]
-		elems := make([]Elem, len(matching))
-		for i, e := range matching {
-			elems[i] = Elem{Label: e.label, Body: buildRecord(e.body)}
+		if !found {
+			return nil, notFoundError(f.name, seg)
 		}
-		return Collection{Elems: elems}, nil
 	}
+	return cur, nil
 }
 
 func (f *File) Set(path string, v Value) error {
@@ -54,116 +39,59 @@ func (f *File) Set(path string, v Value) error {
 		return pathError(f.name, "L401", "")
 	}
 
-	lastSeg := segs[len(segs)-1]
-	parent, failSeg, ok := resolveParent(f, segs[:len(segs)-1], lastSeg)
+	targetBlock, remSegs, targetDepth, failSeg, ok := resolveTargetBlock(f.body, segs, 0)
 	if !ok {
 		return notFoundError(f.name, failSeg)
 	}
 
-	if parent.kind == parentCollection {
-		recVal, isRec := v.(Record)
-		if !isRec {
-			return pathError(f.name, "L403", "use a record for a collection element")
+	for _, seg := range remSegs {
+		if strings.HasPrefix(seg, "$") {
+			return pathError(f.name, "L403", "rename keys that start with $")
 		}
-		if hint := validateValue(recVal, parent.depth+1); hint != "" {
-			return pathError(f.name, "L403", hint)
-		}
-		vNorm := normalizeValue(recVal).(Record)
-
-		var existingElem *entry
-		lastCollIdx := -1
-		for idx, e := range parent.block.entries {
-			if e.key == parent.collKey {
-				lastCollIdx = idx
-				if e.label == lastSeg {
-					existingElem = e
-				}
-			}
-		}
-
-		if existingElem != nil {
-			oldBodyOneLine := false
-			if len(existingElem.body.entries) > 0 || len(existingElem.body.trailing) > 0 {
-				oldBodyOneLine = existingElem.body.oneLine
-			}
-			newBody := blockFromRecord(vNorm)
-			newBody.oneLine = oldBodyOneLine
-			existingElem.body = newBody
-		} else {
-			newElem := &entry{
-				kind:  entryElem,
-				key:   parent.collKey,
-				label: lastSeg,
-				body:  blockFromRecord(vNorm),
-			}
-			parent.block.entries = slices.Insert(parent.block.entries, lastCollIdx+1, newElem)
-		}
-		return nil
 	}
 
-	if strings.HasPrefix(lastSeg, "$") {
-		return pathError(f.name, "L403", "rename keys that start with $")
+	entryDepth := targetDepth + len(remSegs) - 1
+	if entryDepth >= maxBlockDepth {
+		return pathError(f.name, "L403", errorHints["L107"])
 	}
-
-	if hint := validateValue(v, parent.depth+1); hint != "" {
+	if hint := validateValue(v, entryDepth+1); hint != "" {
 		return pathError(f.name, "L403", hint)
 	}
 
 	vNorm := normalizeValue(v)
+	exactIdx, prefixIdxs, _, lastPartialIdx := matchEntriesInBlock(targetBlock, remSegs)
 
-	firstIdx, lastIdx := keyRange(parent.block, lastSeg)
-	var oldEnt *entry
-	if firstIdx != -1 {
-		oldEnt = parent.block.entries[firstIdx]
+	var oldEnt, layoutEnt *entry
+	if exactIdx != -1 {
+		oldEnt = targetBlock.entries[exactIdx]
+		layoutEnt = oldEnt
+	} else if len(prefixIdxs) > 0 {
+		oldEnt = targetBlock.entries[prefixIdxs[0]]
 	}
 
-	var newEntries []*entry
-	switch val := vNorm.(type) {
-	case Collection:
-		for _, elem := range val.Elems {
-			newEntries = append(newEntries, &entry{
-				kind:  entryElem,
-				key:   lastSeg,
-				label: elem.Label,
-				body:  blockFromRecord(elem.Body),
-			})
+	newEnt := buildEntryFromPathAndValue(remSegs, vNorm, layoutEnt)
+
+	switch {
+	case exactIdx != -1:
+		newEnt.comments = oldEnt.comments
+		newEnt.blankBefore = oldEnt.blankBefore
+		targetBlock.entries[exactIdx] = newEnt
+	case len(prefixIdxs) > 0:
+		firstIdx := prefixIdxs[0]
+		newEnt.comments = oldEnt.comments
+		newEnt.blankBefore = oldEnt.blankBefore
+		targetBlock.entries[firstIdx] = newEnt
+		for k := len(prefixIdxs) - 1; k >= 1; k-- {
+			idx := prefixIdxs[k]
+			removeEntries(targetBlock, idx, idx)
 		}
-	case Record:
-		b := blockFromRecord(val)
-		if oldEnt != nil && oldEnt.kind == entryRecord &&
-			(len(oldEnt.body.entries) > 0 || len(oldEnt.body.trailing) > 0) {
-			b.oneLine = oldEnt.body.oneLine
-		}
-		newEntries = []*entry{{
-			kind: entryRecord,
-			key:  lastSeg,
-			body: b,
-		}}
+	case lastPartialIdx != -1:
+		targetBlock.entries = slices.Insert(targetBlock.entries, lastPartialIdx+1, newEnt)
 	default:
-		n := nodeFromValue(val)
-		if oldEnt != nil && oldEnt.kind == entryAssign {
-			if lnOld, ok := oldEnt.value.(*listNode); ok {
-				if lnNew, ok := n.(*listNode); ok {
-					lnNew.oneLine = lnOld.oneLine
-				}
-			}
+		if len(targetBlock.entries) == 0 && len(targetBlock.trailing) == 0 {
+			targetBlock.oneLine = false
 		}
-		newEntries = []*entry{{
-			kind:  entryAssign,
-			key:   lastSeg,
-			value: n,
-		}}
-	}
-
-	if oldEnt != nil {
-		newEntries[0].comments = oldEnt.comments
-		newEntries[0].blankBefore = oldEnt.blankBefore
-		parent.block.entries = slices.Replace(parent.block.entries, firstIdx, lastIdx+1, newEntries...)
-	} else {
-		if len(parent.block.entries) == 0 && len(parent.block.trailing) == 0 {
-			parent.block.oneLine = false
-		}
-		parent.block.entries = append(parent.block.entries, newEntries...)
+		targetBlock.entries = append(targetBlock.entries, newEnt)
 	}
 	return nil
 }
@@ -174,42 +102,116 @@ func (f *File) Delete(path string) error {
 		return pathError(f.name, "L401", "")
 	}
 
-	lastSeg := segs[len(segs)-1]
-	parent, failSeg, ok := resolveParent(f, segs[:len(segs)-1], lastSeg)
+	targetBlock, remSegs, _, failSeg, ok := resolveTargetBlock(f.body, segs, 0)
 	if !ok {
 		return notFoundError(f.name, failSeg)
 	}
 
-	if parent.kind == parentCollection {
-		for idx, e := range parent.block.entries {
-			if e.key == parent.collKey && e.label == lastSeg {
-				removeEntries(parent.block, idx, idx)
-				return nil
-			}
+	exactIdx, prefixIdxs, maxPartialLen, _ := matchEntriesInBlock(targetBlock, remSegs)
+	switch {
+	case exactIdx != -1:
+		removeEntries(targetBlock, exactIdx, exactIdx)
+		return nil
+	case len(prefixIdxs) > 0:
+		for k := len(prefixIdxs) - 1; k >= 0; k-- {
+			idx := prefixIdxs[k]
+			removeEntries(targetBlock, idx, idx)
 		}
-		return notFoundError(f.name, lastSeg)
+		return nil
+	default:
+		return notFoundError(f.name, remSegs[maxPartialLen])
 	}
-
-	firstIdx, lastIdx := keyRange(parent.block, lastSeg)
-	if firstIdx == -1 {
-		return notFoundError(f.name, lastSeg)
-	}
-	removeEntries(parent.block, firstIdx, lastIdx)
-	return nil
 }
 
-func keyRange(b *block, key string) (int, int) {
-	first := -1
-	last := -1
-	for i, e := range b.entries {
-		if e.key == key {
-			if first == -1 {
-				first = i
+func resolveTargetBlock(b *block, segs []string, depth int) (*block, []string, int, string, bool) {
+	for {
+		advanced := false
+		for _, e := range b.entries {
+			ep := entryKeyPath(e)
+			if len(ep) < len(segs) && slices.Equal(ep, segs[:len(ep)]) {
+				if e.kind == entryAssign {
+					return nil, nil, 0, segs[len(ep)], false
+				}
+				b = e.body
+				segs = segs[len(ep):]
+				depth += len(ep)
+				advanced = true
+				break
 			}
-			last = i
+		}
+		if !advanced {
+			return b, segs, depth, "", true
 		}
 	}
-	return first, last
+}
+
+func matchEntriesInBlock(b *block, remSegs []string) (exactIdx int, prefixIdxs []int, maxPartialLen int, lastPartialIdx int) {
+	exactIdx = -1
+	lastPartialIdx = -1
+	n := len(remSegs)
+	for i, e := range b.entries {
+		ep := entryKeyPath(e)
+		if slices.Equal(ep, remSegs) {
+			exactIdx = i
+			return exactIdx, nil, n, -1
+		}
+		if len(ep) > n && slices.Equal(ep[:n], remSegs) {
+			prefixIdxs = append(prefixIdxs, i)
+			continue
+		}
+		common := 0
+		for common < len(ep) && common < n && ep[common] == remSegs[common] {
+			common++
+		}
+		if common > 0 && common < len(ep) {
+			if common > maxPartialLen {
+				maxPartialLen = common
+				lastPartialIdx = i
+			} else if common == maxPartialLen {
+				lastPartialIdx = i
+			}
+		}
+	}
+	return exactIdx, prefixIdxs, maxPartialLen, lastPartialIdx
+}
+
+func buildEntryFromPathAndValue(segs []string, vNorm Value, oldEnt *entry) *entry {
+	var labels []labelSpan
+	if len(segs) > 1 {
+		labels = make([]labelSpan, len(segs)-1)
+		for i, s := range segs[1:] {
+			labels[i] = labelSpan{text: s}
+		}
+	}
+	switch val := vNorm.(type) {
+	case Record:
+		b := blockFromRecord(val)
+		if oldEnt != nil && oldEnt.kind == entryRecord &&
+			(len(oldEnt.body.entries) > 0 || len(oldEnt.body.trailing) > 0) {
+			b.oneLine = oldEnt.body.oneLine
+		}
+		return &entry{
+			kind:   entryRecord,
+			key:    segs[0],
+			labels: labels,
+			body:   b,
+		}
+	default:
+		n := nodeFromValue(val)
+		if oldEnt != nil && oldEnt.kind == entryAssign {
+			if lnOld, ok := oldEnt.value.(*listNode); ok {
+				if lnNew, ok := n.(*listNode); ok {
+					lnNew.oneLine = lnOld.oneLine
+				}
+			}
+		}
+		return &entry{
+			kind:   entryAssign,
+			key:    segs[0],
+			labels: labels,
+			value:  n,
+		}
+	}
 }
 
 func removeEntries(b *block, fromIdx, toIdx int) {
@@ -255,48 +257,7 @@ func ParseValue(src []byte) (Value, error) {
 		val Value
 		ok  bool
 	)
-	if tokens[pos].kind == tokString && tokens[pos+1].kind == tokLBrace {
-		var elems []Elem
-		seenLabels := make(map[string]bool)
-		ok = true
-
-		for {
-			labelTok := p.next()
-			body, blockOK := p.parseBracedBlock()
-			if !blockOK {
-				ok = false
-				break
-			}
-			if seenLabels[labelTok.text] {
-				p.errors = append(p.errors, newError("", labelTok.pos, "L201", ""))
-			}
-			seenLabels[labelTok.text] = true
-			p.errors = append(p.errors, validate("", body)...)
-			elems = append(elems, Elem{Label: labelTok.text, Body: buildRecord(body)})
-
-			hasSep := false
-			for p.peek().kind == tokNewline || p.peek().kind == tokComma || p.peek().kind == tokComment {
-				if p.peek().kind == tokNewline || p.peek().kind == tokComma {
-					hasSep = true
-				}
-				p.next()
-			}
-
-			if p.peek().kind == tokEOF {
-				break
-			}
-			if p.peek().kind == tokString && p.peekNext().kind == tokLBrace {
-				if !hasSep {
-					p.syntaxError(p.peek(), "L106", "separate entries with a newline or a comma")
-					ok = false
-					break
-				}
-				continue
-			}
-			break
-		}
-		val = Collection{Elems: elems}
-	} else if tokens[pos].kind == tokLBrace {
+	if tokens[pos].kind == tokLBrace {
 		var body *block
 		body, ok = p.parseBracedBlock()
 		if ok {
@@ -339,58 +300,6 @@ func pathError(fileName, code, hint string) error {
 
 func notFoundError(file, seg string) error {
 	return pathError(file, "L402", "check the path at segment "+quoteString(seg))
-}
-
-type parentType int
-
-const (
-	parentRecord parentType = iota
-	parentCollection
-)
-
-type parentTarget struct {
-	kind    parentType
-	block   *block
-	collKey string
-	depth   int
-}
-
-func resolveParent(f *File, parentSegs []string, lastSeg string) (parentTarget, string, bool) {
-	target := parentTarget{kind: parentRecord, block: f.body, depth: 0}
-	for i, seg := range parentSegs {
-		switch target.kind {
-		case parentRecord:
-			firstIdx, _ := keyRange(target.block, seg)
-			if firstIdx == -1 {
-				return parentTarget{}, seg, false
-			}
-			first := target.block.entries[firstIdx]
-			switch first.kind {
-			case entryAssign:
-				if i < len(parentSegs)-1 {
-					return parentTarget{}, parentSegs[i+1], false
-				}
-				return parentTarget{}, lastSeg, false
-			case entryRecord:
-				target = parentTarget{kind: parentRecord, block: first.body, depth: target.depth + 1}
-			case entryElem:
-				target = parentTarget{kind: parentCollection, block: target.block, collKey: seg, depth: target.depth}
-			}
-		case parentCollection:
-			var elemEnt *entry
-			for _, e := range target.block.entries {
-				if e.key == target.collKey && e.label == seg {
-					elemEnt = e
-					break
-				}
-			}
-			if elemEnt == nil {
-				return parentTarget{}, seg, false
-			}
-			target = parentTarget{kind: parentRecord, block: elemEnt.body, depth: target.depth + 1}
-		}
-	}
-	return target, "", true
 }
 
 func scanNumber(s string) (int, bool, bool) {
@@ -454,6 +363,9 @@ func validateValue(v Value, depth int) string {
 		if !ok || len(val.Unit) == 0 {
 			return "write a quantity such as 512Mi"
 		}
+		if (val.Number == "0" || val.Number == "-0") && isRadixPrefix(val.Unit[0]) {
+			return "write a quantity such as 512Mi"
+		}
 		for _, r := range val.Unit {
 			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
 				return "write a quantity such as 512Mi"
@@ -482,7 +394,7 @@ func validateValue(v Value, depth int) string {
 	case List:
 		for _, el := range val {
 			switch el.(type) {
-			case List, Record, Collection:
+			case List, Record:
 				return "use only scalars as list elements"
 			}
 			if hint := validateValue(el, depth); hint != "" {
@@ -519,25 +431,6 @@ func validateValue(v Value, depth int) string {
 				return hint
 			}
 		}
-	case Collection:
-		if len(val.Elems) == 0 {
-			return "write at least one collection element"
-		}
-		seenLabels := make(map[string]bool)
-		for _, el := range val.Elems {
-			if !utf8.ValidString(el.Label) {
-				return "use valid UTF-8 text"
-			}
-			if seenLabels[el.Label] {
-				return "remove the duplicate label"
-			}
-			seenLabels[el.Label] = true
-		}
-		for _, el := range val.Elems {
-			if hint := validateValue(el.Body, depth); hint != "" {
-				return hint
-			}
-		}
 	}
 	return ""
 }
@@ -562,12 +455,6 @@ func normalizeValue(v Value) Value {
 			fields[i] = Field{Key: f.Key, Value: normalizeValue(f.Value)}
 		}
 		return Record{Fields: fields}
-	case Collection:
-		elems := make([]Elem, len(val.Elems))
-		for i, el := range val.Elems {
-			elems[i] = Elem{Label: el.Label, Body: normalizeValue(el.Body).(Record)}
-		}
-		return Collection{Elems: elems}
 	default:
 		return val
 	}

@@ -239,19 +239,19 @@ tail = 1
 					{Key: "head", Value: Int(0)},
 					{
 						Key: "port",
-						Value: Collection{
-							Elems: []Elem{
+						Value: Record{
+							Fields: []Field{
 								{
-									Label: "http",
-									Body: Record{
+									Key: "http",
+									Value: Record{
 										Fields: []Field{
 											{Key: "number", Value: Int(8080)},
 										},
 									},
 								},
 								{
-									Label: "metrics",
-									Body: Record{
+									Key: "metrics",
+									Value: Record{
 										Fields: []Field{
 											{Key: "number", Value: Int(9090)},
 										},
@@ -261,6 +261,93 @@ tail = 1
 						},
 					},
 					{Key: "tail", Value: Int(1)},
+				},
+			},
+		},
+		{
+			name: "labeled_sugar_and_non_contiguous",
+			src: `@lkal "0.1"
+
+port "http" { number = 8080 }
+host = "localhost"
+port "grpc" { number = 9090 }
+route "GET" "/users" { handler = "list" }
+route "POST" "/users" { handler = "create" }
+env "LOG_LEVEL" = "info"
+env "PORT" = 8080
+`,
+			want: Record{
+				Fields: []Field{
+					{
+						Key: "port",
+						Value: Record{
+							Fields: []Field{
+								{
+									Key: "http",
+									Value: Record{
+										Fields: []Field{
+											{Key: "number", Value: Int(8080)},
+										},
+									},
+								},
+								{
+									Key: "grpc",
+									Value: Record{
+										Fields: []Field{
+											{Key: "number", Value: Int(9090)},
+										},
+									},
+								},
+							},
+						},
+					},
+					{Key: "host", Value: String("localhost")},
+					{
+						Key: "route",
+						Value: Record{
+							Fields: []Field{
+								{
+									Key: "GET",
+									Value: Record{
+										Fields: []Field{
+											{
+												Key: "/users",
+												Value: Record{
+													Fields: []Field{
+														{Key: "handler", Value: String("list")},
+													},
+												},
+											},
+										},
+									},
+								},
+								{
+									Key: "POST",
+									Value: Record{
+										Fields: []Field{
+											{
+												Key: "/users",
+												Value: Record{
+													Fields: []Field{
+														{Key: "handler", Value: String("create")},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Key: "env",
+						Value: Record{
+							Fields: []Field{
+								{Key: "LOG_LEVEL", Value: String("info")},
+								{Key: "PORT", Value: Int(8080)},
+							},
+						},
+					},
 				},
 			},
 		},
@@ -296,11 +383,11 @@ service "web" {
 				Fields: []Field{
 					{
 						Key: "service",
-						Value: Collection{
-							Elems: []Elem{
+						Value: Record{
+							Fields: []Field{
 								{
-									Label: "web",
-									Body: Record{
+									Key: "web",
+									Value: Record{
 										Fields: []Field{
 											{Key: "replicas", Value: Int(3)},
 											{Key: "traffic-share", Value: Decimal("0.25")},
@@ -315,11 +402,11 @@ service "web" {
 											},
 											{
 												Key: "container",
-												Value: Collection{
-													Elems: []Elem{
+												Value: Record{
+													Fields: []Field{
 														{
-															Label: "app",
-															Body: Record{
+															Key: "app",
+															Value: Record{
 																Fields: []Field{
 																	{Key: "image", Value: String("ghcr.io/acme/web:1.4.2")},
 																	{
@@ -334,11 +421,11 @@ service "web" {
 																	{Key: "timeout", Value: Quantity{Number: "30", Unit: "s"}},
 																	{
 																		Key: "port",
-																		Value: Collection{
-																			Elems: []Elem{
+																		Value: Record{
+																			Fields: []Field{
 																				{
-																					Label: "http",
-																					Body: Record{
+																					Key: "http",
+																					Value: Record{
 																						Fields: []Field{
 																							{Key: "number", Value: Int(8080)},
 																							{Key: "protocol", Value: Enum("tcp")},
@@ -346,8 +433,8 @@ service "web" {
 																					},
 																				},
 																				{
-																					Label: "metrics",
-																					Body: Record{
+																					Key: "metrics",
+																					Value: Record{
 																						Fields: []Field{
 																							{Key: "number", Value: Int(9090)},
 																							{Key: "protocol", Value: Enum("tcp")},
@@ -763,22 +850,22 @@ elem "label1" { y = 2 }
 		if e1.kind != entryRecord || e1.key != "record" || e1.keyPos != (Pos{Line: 4, Col: 1}) {
 			t.Errorf("e1 record mismatch: kind=%v key=%q pos=%v", e1.kind, e1.key, e1.keyPos)
 		}
-		if e1.label != "" || e1.labelPos != (Pos{}) {
-			t.Errorf("entryRecord label should be empty, got label=%q pos=%v", e1.label, e1.labelPos)
+		if len(e1.labels) != 0 {
+			t.Errorf("entryRecord labels should be empty, got %+v", e1.labels)
 		}
 		if e1.value != nil || e1.body == nil {
 			t.Errorf("entryRecord value must be nil and body non-nil")
 		}
 
 		e2 := f.body.entries[2]
-		if e2.kind != entryElem || e2.key != "elem" || e2.keyPos != (Pos{Line: 5, Col: 1}) {
+		if e2.kind != entryRecord || e2.key != "elem" || e2.keyPos != (Pos{Line: 5, Col: 1}) {
 			t.Errorf("e2 elem mismatch: kind=%v key=%q pos=%v", e2.kind, e2.key, e2.keyPos)
 		}
-		if e2.label != "label1" || e2.labelPos != (Pos{Line: 5, Col: 6}) {
-			t.Errorf("e2 elem label mismatch: label=%q pos=%v, want label1, 5:6", e2.label, e2.labelPos)
+		if len(e2.labels) != 1 || e2.labels[0].text != "label1" || e2.labels[0].pos != (Pos{Line: 5, Col: 6}) {
+			t.Errorf("e2 elem label mismatch: labels=%+v, want label1, 5:6", e2.labels)
 		}
 		if e2.value != nil || e2.body == nil {
-			t.Errorf("entryElem value must be nil and body non-nil")
+			t.Errorf("labeled entryRecord value must be nil and body non-nil")
 		}
 	})
 
@@ -814,8 +901,8 @@ service "web" {
 			t.Fatalf("expected 1 top-level entry, got %+v", f.body)
 		}
 		svc := f.body.entries[0]
-		if svc.kind != entryElem || svc.key != "service" || svc.label != "web" {
-			t.Errorf("service entry mismatch: kind=%v key=%q label=%q", svc.kind, svc.key, svc.label)
+		if svc.kind != entryRecord || svc.key != "service" || len(svc.labels) != 1 || svc.labels[0].text != "web" {
+			t.Errorf("service entry mismatch: kind=%v key=%q labels=%+v", svc.kind, svc.key, svc.labels)
 		}
 		if len(svc.comments) != 1 || svc.comments[0].text != "フロントエンドのWebサーバー" {
 			t.Errorf("service comments mismatch: %+v", svc.comments)
@@ -833,7 +920,7 @@ service "web" {
 		}
 
 		container := svc.body.entries[3]
-		if container.key != "container" || container.label != "app" || !container.blankBefore {
+		if container.key != "container" || len(container.labels) != 1 || container.labels[0].text != "app" || !container.blankBefore {
 			t.Errorf("container blankBefore = %v, want true", container.blankBefore)
 		}
 		if container.body == nil || len(container.body.entries) != 9 {
@@ -1177,18 +1264,18 @@ port =    tcp
 				wantCol:  3,
 			},
 			{
-				name:     "L202_conflicting_kind",
+				name:     "L201_conflicting_kind",
 				src:      "@lkal \"0.1\"\na = 1\na {}",
-				wantCode: "L202",
+				wantCode: "L201",
 				wantLine: 3,
 				wantCol:  1,
 			},
 			{
-				name:     "L203_discontinuous_collection",
-				src:      "@lkal \"0.1\"\ns \"a\" {}\nx = 1\ns \"b\" {}",
-				wantCode: "L203",
-				wantLine: 4,
-				wantCol:  1,
+				name:     "L201_multi_label_duplicate",
+				src:      "@lkal \"0.1\"\nroute \"GET\" \"/a\" {}\nroute \"GET\" \"/a\" = 1",
+				wantCode: "L201",
+				wantLine: 3,
+				wantCol:  13,
 			},
 			{
 				name:     "L204_mixed_list",
@@ -1205,11 +1292,11 @@ port =    tcp
 				wantCol:  1,
 			},
 			{
-				name:     "L206_assign_to_collection_elem",
-				src:      "@lkal \"0.1\"\ns \"a\" = 1",
-				wantCode: "L206",
+				name:     "L205_dollar_label",
+				src:      "@lkal \"0.1\"\ns \"$lbl\" = 1",
+				wantCode: "L205",
 				wantLine: 2,
-				wantCol:  7,
+				wantCol:  3,
 			},
 			{
 				name:     "L207_unsupported_version",
@@ -1482,14 +1569,14 @@ func TestParseNestingLimit(t *testing.T) {
 			},
 		},
 		{
-			name:   "1001_nested_element_blocks_fail",
-			src:    "@lkal \"0.1\"\n" + strings.Repeat("a \"l\" { ", 1001) + "x = 1" + strings.Repeat(" }", 1001) + "\nb = c\n",
+			name:   "501_nested_labeled_blocks_fail",
+			src:    "@lkal \"0.1\"\n" + strings.Repeat("a \"l\" { ", 501) + "x = 1" + strings.Repeat(" }", 501) + "\nb = c\n",
 			wantOK: false,
 			wantErrs: []nestTExpectedErr{
 				{
 					code:     "L107",
 					line:     2,
-					col:      8007,
+					col:      4003,
 					wantMsg:  "blocks nested too deeply",
 					wantHint: "nest blocks at most 1000 levels deep",
 				},
