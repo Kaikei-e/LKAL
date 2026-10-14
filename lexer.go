@@ -258,6 +258,21 @@ func lexCheckCommentOrRawInvalidChars(file string, lineNum int, cols []int, line
 	return errs
 }
 
+func isRadixPrefix(b byte) bool {
+	return b == 'x' || b == 'X' || b == 'b' || b == 'B' || b == 'o' || b == 'O'
+}
+
+func isExponentPrefix(s string) bool {
+	if len(s) < 2 || (s[0] != 'e' && s[0] != 'E') {
+		return false
+	}
+	i := 1
+	if s[i] == '+' || s[i] == '-' {
+		i++
+	}
+	return i < len(s) && s[i] >= '0' && s[i] <= '9'
+}
+
 func lexValidateNumber(run string) (tokKind, string) {
 	s := run
 	if s[0] == '-' {
@@ -269,7 +284,7 @@ func lexValidateNumber(run string) (tokKind, string) {
 
 	var intDigits string
 	if s[0] == '0' {
-		if len(s) > 1 && s[1] >= '0' && s[1] <= '9' {
+		if len(s) > 1 && ((s[1] >= '0' && s[1] <= '9') || isRadixPrefix(s[1])) {
 			return tokIllegal, "L009"
 		}
 		intDigits = "0"
@@ -297,6 +312,10 @@ func lexValidateNumber(run string) (tokKind, string) {
 		}
 		fracDigits = s[:k]
 		s = s[k:]
+	}
+
+	if isExponentPrefix(s) {
+		return tokIllegal, "L009"
 	}
 
 	hasUnit := false
