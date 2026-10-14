@@ -1417,4 +1417,3 @@ func TestStdinStreaming(t *testing.T) {
 		}
 	})
 }
-

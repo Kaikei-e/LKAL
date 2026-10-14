@@ -1077,4 +1077,3 @@ block {
 		t.Errorf("Format mismatch:\ngot:\n%s\nwant:\n%s", string(got), want)
 	}
 }
-
