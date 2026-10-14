@@ -690,7 +690,7 @@ func TestGet(t *testing.T) {
 	specFile := writeTemp(t, dir, "spec.lkal", specExampleDoc)
 	recordFile := writeTemp(t, dir, "record.lkal", "@lkal \"0.1\"\nr { x = 1, y = 2 }\n")
 
-	wantPortCollection := "\"http\" {\n  number = 8080\n  protocol = .tcp\n}\n\"metrics\" {\n  number = 9090\n  protocol = .tcp\n}\n"
+	wantPortRecord := "{\n  http {\n    number = 8080\n    protocol = .tcp\n  }\n  metrics {\n    number = 9090\n    protocol = .tcp\n  }\n}\n"
 
 	tests := []struct {
 		name       string
@@ -702,6 +702,13 @@ func TestGet(t *testing.T) {
 		{
 			name:       "spec example int",
 			args:       []string{"get", specFile, "service/web/container/app/port/http/number"},
+			wantCode:   0,
+			wantStdout: "8080\n",
+			wantStderr: "",
+		},
+		{
+			name:       "spec example int with -r",
+			args:       []string{"get", "-r", specFile, "service/web/container/app/port/http/number"},
 			wantCode:   0,
 			wantStdout: "8080\n",
 			wantStderr: "",
@@ -721,6 +728,13 @@ func TestGet(t *testing.T) {
 			wantStderr: "",
 		},
 		{
+			name:       "spec example string with -r",
+			args:       []string{"get", "-r", specFile, "service/web/container/app/image"},
+			wantCode:   0,
+			wantStdout: "ghcr.io/acme/web:1.4.2\n",
+			wantStderr: "",
+		},
+		{
 			name:       "quoted segment string",
 			args:       []string{"get", specFile, `service/web/labels/"app.kubernetes.io/name"`},
 			wantCode:   0,
@@ -732,6 +746,20 @@ func TestGet(t *testing.T) {
 			args:       []string{"get", specFile, "service/web/container/app/port/http/protocol"},
 			wantCode:   0,
 			wantStdout: ".tcp\n",
+			wantStderr: "",
+		},
+		{
+			name:       "spec example enum with -r",
+			args:       []string{"get", "-r", specFile, "service/web/container/app/port/http/protocol"},
+			wantCode:   0,
+			wantStdout: "tcp\n",
+			wantStderr: "",
+		},
+		{
+			name:       "spec example ref with -r",
+			args:       []string{"get", "-r", specFile, "service/web/container/app/secret"},
+			wantCode:   0,
+			wantStdout: "secret/db-creds\n",
 			wantStderr: "",
 		},
 		{
@@ -749,6 +777,13 @@ func TestGet(t *testing.T) {
 			wantStderr: "",
 		},
 		{
+			name:       "spec example raw string with -r",
+			args:       []string{"get", "-r", specFile, "service/web/startup"},
+			wantCode:   0,
+			wantStdout: "#!/bin/sh\nexec /app/web --port 8080\n",
+			wantStderr: "",
+		},
+		{
 			name:       "spec example record",
 			args:       []string{"get", specFile, "service/web/container/app/port/http"},
 			wantCode:   0,
@@ -756,10 +791,10 @@ func TestGet(t *testing.T) {
 			wantStderr: "",
 		},
 		{
-			name:       "collection key layout",
+			name:       "nested record from labeled blocks",
 			args:       []string{"get", specFile, "service/web/container/app/port"},
 			wantCode:   0,
-			wantStdout: wantPortCollection,
+			wantStdout: wantPortRecord,
 			wantStderr: "",
 		},
 		{
@@ -883,14 +918,32 @@ func TestSet(t *testing.T) {
 		}
 	})
 
-	t.Run("non-record value for collection element", func(t *testing.T) {
+	t.Run("scalar value for labeled block converts to labeled assignment", func(t *testing.T) {
 		dir := t.TempDir()
 		p := writeTemp(t, dir, "web.lkal", specExampleDoc)
 
-		code, stdout, stderr := execRun(t, []string{"set", p, "service/web/container/app/port/http", "1"})
-		wantStderr := p + ": L403 invalid value\n  hint: use a record for a collection element\n"
+		code, stdout, stderr := execRun(t, []string{"set", p, "service/web/container/app/port/http", "8080"})
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("set scalar on labeled block:\nexit code: got %d, want 0\nstdout: got %q, want \"\"\nstderr: got %q, want \"\"",
+				code, stdout, stderr)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read file: %v", err)
+		}
+		if !strings.Contains(string(data), `port "http" = 8080`) {
+			t.Errorf("expected labeled assignment 'port \"http\" = 8080', got:\n%s", string(data))
+		}
+	})
+
+	t.Run("dollar-prefixed key rejected with L403", func(t *testing.T) {
+		dir := t.TempDir()
+		p := writeTemp(t, dir, "web.lkal", specExampleDoc)
+
+		code, stdout, stderr := execRun(t, []string{"set", p, `service/web/container/app/port/"$bad"`, "1"})
+		wantStderr := p + ": L403 invalid value\n  hint: rename keys that start with $\n"
 		if code != 1 || stdout != "" || stderr != wantStderr {
-			t.Errorf("set non-record on collection element:\nexit code: got %d, want 1\nstdout: got %q, want \"\"\nstderr: got %q, want %q",
+			t.Errorf("set dollar key:\nexit code: got %d, want 1\nstdout: got %q, want \"\"\nstderr: got %q, want %q",
 				code, stdout, stderr, wantStderr)
 		}
 		data, err := os.ReadFile(p)
@@ -915,14 +968,29 @@ func TestSet(t *testing.T) {
 		}
 	})
 
-	t.Run("missing parent exits 1 and leaves file unchanged", func(t *testing.T) {
+	t.Run("missing parent creates labeled entry", func(t *testing.T) {
 		dir := t.TempDir()
 		p := writeTemp(t, dir, "web.lkal", specExampleDoc)
 
 		code, stdout, stderr := execRun(t, []string{"set", p, "service/web/missing/image", "\"foo\""})
-		wantStderr := p + ": L402 path not found\n  hint: check the path at segment \"missing\"\n"
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("set new labeled entry:\nexit code: got %d, want 0\nstdout: got %q, want \"\"\nstderr: got %q, want \"\"",
+				code, stdout, stderr)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil || !strings.Contains(string(data), `missing "image" = "foo"`) {
+			t.Errorf("expected 'missing \"image\" = \"foo\"' in file, got:\n%s", string(data))
+		}
+	})
+
+	t.Run("scalar parent exits 1 and leaves file unchanged", func(t *testing.T) {
+		dir := t.TempDir()
+		p := writeTemp(t, dir, "web.lkal", specExampleDoc)
+
+		code, stdout, stderr := execRun(t, []string{"set", p, "service/web/replicas/image", "\"foo\""})
+		wantStderr := p + ": L402 path not found\n  hint: check the path at segment \"image\"\n"
 		if code != 1 || stdout != "" || stderr != wantStderr {
-			t.Errorf("set missing parent:\nexit code: got %d, want 1\nstdout: got %q, want \"\"\nstderr: got %q, want %q",
+			t.Errorf("set scalar parent:\nexit code: got %d, want 1\nstdout: got %q, want \"\"\nstderr: got %q, want %q",
 				code, stdout, stderr, wantStderr)
 		}
 		data, err := os.ReadFile(p)
@@ -1267,3 +1335,86 @@ func TestPartialIOErrors(t *testing.T) {
 		})
 	}
 }
+
+func execRunWithStdin(t *testing.T, args []string, stdin string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := run(args, strings.NewReader(stdin), &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestStdinStreaming(t *testing.T) {
+	const (
+		nonCanonLKAL = "@lkal \"0.1\"\na = 1, b = \"hello\"\n"
+		canonLKAL    = "@lkal \"0.1\"\n\na = 1\nb = \"hello\"\n"
+		invalidLKAL  = "@lkal \"0.1\"\na = b\n"
+		validJSON    = "{\n  \"$lkal\": \"0.1\",\n  \"a\": 1,\n  \"b\": \"hello\"\n}\n"
+	)
+
+	t.Run("fmt - formats stdin to stdout", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"fmt", "-"}, nonCanonLKAL)
+		if code != 0 || stdout != canonLKAL || stderr != "" {
+			t.Errorf("fmt -:\ncode=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("fmt -l - prints - when non-canonical", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"fmt", "-l", "-"}, nonCanonLKAL)
+		if code != 0 || stdout != "-\n" || stderr != "" {
+			t.Errorf("fmt -l -:\ncode=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("fmt -w - rejects stdin with exit code 2", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"fmt", "-w", "-"}, nonCanonLKAL)
+		if code != 2 || stdout != "" || !strings.HasPrefix(stderr, "lkal: ") {
+			t.Errorf("fmt -w -:\ncode=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("check - validates stdin and reports - in diagnostics", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"check", "-"}, invalidLKAL)
+		wantStderr := "-:2:5: L102 bare word in value position\n  hint: write \"b\" for a string or .b for an enum\n"
+		if code != 1 || stdout != "" || stderr != wantStderr {
+			t.Errorf("check -:\ncode=%d stdout=%q stderr=%q, want stderr=%q", code, stdout, stderr, wantStderr)
+		}
+	})
+
+	t.Run("json - converts stdin to LKAL-JSON", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"json", "-"}, nonCanonLKAL)
+		if code != 0 || stdout != validJSON || stderr != "" {
+			t.Errorf("json -:\ncode=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("from-json - converts stdin to canonical LKAL", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"from-json", "-"}, validJSON)
+		if code != 0 || stdout != canonLKAL || stderr != "" {
+			t.Errorf("from-json -:\ncode=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("get - and get -r - read from stdin", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"get", "-r", "-", "b"}, canonLKAL)
+		if code != 0 || stdout != "hello\n" || stderr != "" {
+			t.Errorf("get -r - b:\ncode=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("set - writes modified canonical LKAL to stdout", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"set", "-", "a", "42"}, canonLKAL)
+		want := "@lkal \"0.1\"\n\na = 42\nb = \"hello\"\n"
+		if code != 0 || stdout != want || stderr != "" {
+			t.Errorf("set -:\ncode=%d stdout=%q stderr=%q, want stdout=%q", code, stdout, stderr, want)
+		}
+	})
+
+	t.Run("del - writes modified canonical LKAL to stdout", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"del", "-", "b"}, canonLKAL)
+		want := "@lkal \"0.1\"\n\na = 1\n"
+		if code != 0 || stdout != want || stderr != "" {
+			t.Errorf("del -:\ncode=%d stdout=%q stderr=%q, want stdout=%q", code, stdout, stderr, want)
+		}
+	})
+}
+

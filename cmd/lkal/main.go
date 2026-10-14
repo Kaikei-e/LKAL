@@ -22,19 +22,19 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
 		case "fmt":
-			return cmdFmt(args[1:], stdout, stderr)
+			return cmdFmt(args[1:], stdin, stdout, stderr)
 		case "check":
-			return cmdCheck(args[1:], stderr)
+			return cmdCheck(args[1:], stdin, stderr)
 		case "json":
-			return cmdJSON(args[1:], stdout, stderr)
+			return cmdJSON(args[1:], stdin, stdout, stderr)
 		case "from-json":
-			return cmdFromJSON(args[1:], stdout, stderr)
+			return cmdFromJSON(args[1:], stdin, stdout, stderr)
 		case "get":
-			return cmdGet(args[1:], stdout, stderr)
+			return cmdGet(args[1:], stdin, stdout, stderr)
 		case "set":
-			return cmdSet(args[1:], stderr)
+			return cmdSet(args[1:], stdin, stdout, stderr)
 		case "del":
-			return cmdDel(args[1:], stderr)
+			return cmdDel(args[1:], stdin, stdout, stderr)
 		}
 	}
 	fmt.Fprintln(stderr, usageText)
@@ -98,8 +98,15 @@ func parseFlags(name, usage string, args []string, stderr io.Writer, minArgs, ma
 	return *jsonOut, a, true
 }
 
-func readAndParse(file string, jsonOut bool, stderr io.Writer) (*lkal.File, int) {
-	src, err := os.ReadFile(file)
+func readInput(file string, stdin io.Reader) ([]byte, error) {
+	if file == "-" {
+		return io.ReadAll(stdin)
+	}
+	return os.ReadFile(file)
+}
+
+func readAndParse(file string, stdin io.Reader, jsonOut bool, stderr io.Writer) (*lkal.File, int) {
+	src, err := readInput(file, stdin)
 	if err != nil {
 		fmt.Fprintln(stderr, "lkal:", err)
 		return nil, 2
@@ -112,7 +119,7 @@ func readAndParse(file string, jsonOut bool, stderr io.Writer) (*lkal.File, int)
 	return f, 0
 }
 
-func cmdCheck(args []string, stderr io.Writer) int {
+func cmdCheck(args []string, stdin io.Reader, stderr io.Writer) int {
 	jsonOut, files, ok := parseFlags("check", "check [--json] FILE...", args, stderr, 1, -1, nil)
 	if !ok {
 		return 2
@@ -122,7 +129,7 @@ func cmdCheck(args []string, stderr io.Writer) int {
 		hasIO     bool
 	)
 	for _, file := range files {
-		src, err := os.ReadFile(file)
+		src, err := readInput(file, stdin)
 		if err != nil {
 			fmt.Fprintln(stderr, "lkal:", err)
 			hasIO = true
@@ -142,7 +149,7 @@ func cmdCheck(args []string, stderr io.Writer) int {
 	return 0
 }
 
-func cmdFmt(args []string, stdout, stderr io.Writer) int {
+func cmdFmt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var w, l bool
 	jsonOut, files, ok := parseFlags("fmt", "fmt [-w] [-l] [--json] FILE...", args, stderr, 1, -1, func(fs *flag.FlagSet) {
 		fs.BoolVar(&w, "w", false, "")
@@ -151,12 +158,20 @@ func cmdFmt(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 2
 	}
+	if w {
+		for _, file := range files {
+			if file == "-" {
+				fmt.Fprintln(stderr, "lkal: cannot use -w with standard input")
+				return 2
+			}
+		}
+	}
 	var (
 		allErrors []*lkal.Error
 		hasIO     bool
 	)
 	for _, file := range files {
-		src, err := os.ReadFile(file)
+		src, err := readInput(file, stdin)
 		if err != nil {
 			fmt.Fprintln(stderr, "lkal:", err)
 			hasIO = true
@@ -198,7 +213,7 @@ func cmdFmt(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func cmdJSON(args []string, stdout, stderr io.Writer) int {
+func cmdJSON(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var plain bool
 	jsonOut, files, ok := parseFlags("json", "json [-plain] [--json] FILE", args, stderr, 1, 1, func(fs *flag.FlagSet) {
 		fs.BoolVar(&plain, "plain", false, "")
@@ -206,7 +221,7 @@ func cmdJSON(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 2
 	}
-	f, code := readAndParse(files[0], jsonOut, stderr)
+	f, code := readAndParse(files[0], stdin, jsonOut, stderr)
 	if code != 0 {
 		return code
 	}
@@ -215,12 +230,12 @@ func cmdJSON(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func cmdFromJSON(args []string, stdout, stderr io.Writer) int {
+func cmdFromJSON(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	jsonOut, files, ok := parseFlags("from-json", "from-json [--json] FILE", args, stderr, 1, 1, nil)
 	if !ok {
 		return 2
 	}
-	src, err := os.ReadFile(files[0])
+	src, err := readInput(files[0], stdin)
 	if err != nil {
 		fmt.Fprintln(stderr, "lkal:", err)
 		return 2
@@ -238,12 +253,15 @@ func cmdFromJSON(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func cmdGet(args []string, stdout, stderr io.Writer) int {
-	jsonOut, pos, ok := parseFlags("get", "get [--json] FILE PATH", args, stderr, 2, 2, nil)
+func cmdGet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	var raw bool
+	jsonOut, pos, ok := parseFlags("get", "get [-r] [--json] FILE PATH", args, stderr, 2, 2, func(fs *flag.FlagSet) {
+		fs.BoolVar(&raw, "r", false, "")
+	})
 	if !ok {
 		return 2
 	}
-	f, code := readAndParse(pos[0], jsonOut, stderr)
+	f, code := readAndParse(pos[0], stdin, jsonOut, stderr)
 	if code != 0 {
 		return code
 	}
@@ -252,11 +270,24 @@ func cmdGet(args []string, stdout, stderr io.Writer) int {
 		reportErrors(toErrors(err), jsonOut, stderr)
 		return 1
 	}
+	if raw {
+		switch v := val.(type) {
+		case lkal.String:
+			stdout.Write(append([]byte(v), '\n'))
+			return 0
+		case lkal.Enum:
+			stdout.Write(append([]byte(v), '\n'))
+			return 0
+		case lkal.Ref:
+			stdout.Write(append(lkal.FormatValue(v)[1:], '\n'))
+			return 0
+		}
+	}
 	stdout.Write(append(lkal.FormatValue(val), '\n'))
 	return 0
 }
 
-func cmdSet(args []string, stderr io.Writer) int {
+func cmdSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	jsonOut, pos, ok := parseFlags("set", "set [--json] FILE PATH VALUE", args, stderr, 3, 3, nil)
 	if !ok {
 		return 2
@@ -270,13 +301,17 @@ func cmdSet(args []string, stderr io.Writer) int {
 		reportErrors(errs, jsonOut, stderr)
 		return 1
 	}
-	f, code := readAndParse(pos[0], jsonOut, stderr)
+	f, code := readAndParse(pos[0], stdin, jsonOut, stderr)
 	if code != 0 {
 		return code
 	}
 	if err := f.Set(pos[1], val); err != nil {
 		reportErrors(toErrors(err), jsonOut, stderr)
 		return 1
+	}
+	if pos[0] == "-" {
+		stdout.Write(f.Format())
+		return 0
 	}
 	if err := os.WriteFile(pos[0], f.Format(), 0666); err != nil {
 		fmt.Fprintln(stderr, "lkal:", err)
@@ -285,18 +320,22 @@ func cmdSet(args []string, stderr io.Writer) int {
 	return 0
 }
 
-func cmdDel(args []string, stderr io.Writer) int {
+func cmdDel(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	jsonOut, pos, ok := parseFlags("del", "del [--json] FILE PATH", args, stderr, 2, 2, nil)
 	if !ok {
 		return 2
 	}
-	f, code := readAndParse(pos[0], jsonOut, stderr)
+	f, code := readAndParse(pos[0], stdin, jsonOut, stderr)
 	if code != 0 {
 		return code
 	}
 	if err := f.Delete(pos[1]); err != nil {
 		reportErrors(toErrors(err), jsonOut, stderr)
 		return 1
+	}
+	if pos[0] == "-" {
+		stdout.Write(f.Format())
+		return 0
 	}
 	if err := os.WriteFile(pos[0], f.Format(), 0666); err != nil {
 		fmt.Fprintln(stderr, "lkal:", err)
