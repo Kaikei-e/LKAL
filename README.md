@@ -80,16 +80,17 @@ lkal fmt [-w] [-l] FILE…
 lkal check FILE…
 lkal json [-plain] FILE
 lkal from-json FILE
-lkal get FILE PATH
+lkal get [-r] FILE PATH
 lkal set FILE PATH VALUE
 lkal del FILE PATH
 ```
 
-Every command accepts `-json` to print errors as a JSON array on stderr. Exit codes: 0 success, 1 LKAL errors, 2 usage or I/O errors.
+Every command accepts `-json` to print errors as a JSON array on stderr. Passing `-` as `FILE` reads from standard input (`set -` and `del -` write the updated canonical LKAL to stdout; `fmt -w -` is an error). `get -r` prints scalar values in raw form (without quotes, leading `.`, or leading `&`). Exit codes: 0 success, 1 LKAL errors, 2 usage or I/O errors.
 
 ```sh
 lkal set web.lkal service/web/container/app/image '"ghcr.io/acme/web:1.5.0"'
 lkal get web.lkal service/web/container/app/port/http/number   # 8080
+lkal get -r web.lkal service/web/container/app/image           # ghcr.io/acme/web:1.5.0
 ```
 
 ## Values
@@ -104,10 +105,9 @@ lkal get web.lkal service/web/container/app/port/http/number   # 8080
 | `512Mi`, `30s` | `Quantity` |
 | `&secret/db-creds` | `Ref` |
 | `["a", "b"]` | `List` (scalars of one type) |
-| `key { … }` | `Record` |
-| `key "label" { … }` | `Collection` |
+| `key { … }`, `key "label" { … }`, `key "label" = …` | `Record` (labels expand to nested records) |
 
-`lkal.Equal` compares two values. Record fields and collection elements match in any order; lists match in order.
+`lkal.Equal` compares two values. Record fields match in any order; lists match in order.
 
 ## Development
 
@@ -121,7 +121,7 @@ go test -run '^$' -fuzz=FuzzFromJSON -fuzztime=30s
 
 `go test -short ./...` skips the timing checks, which can fail on a heavily loaded machine.
 
-Design decisions are recorded in [`docs/ADR`](docs/ADR).
+Design principles are in [`docs/PRINCIPLE.md`](docs/PRINCIPLE.md); design decisions are recorded in [`docs/ADR`](docs/ADR).
 
 ## License
 
