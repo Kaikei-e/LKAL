@@ -394,9 +394,7 @@ func resolveParent(f *File, parentSegs []string, lastSeg string) (parentTarget, 
 }
 
 func scanNumber(s string) (int, bool, bool) {
-	if strings.HasPrefix(s, "-") {
-		s = s[1:]
-	}
+	s = strings.TrimPrefix(s, "-")
 	if len(s) == 0 {
 		return 0, false, false
 	}
