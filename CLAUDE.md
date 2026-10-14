@@ -18,6 +18,9 @@ LKAL is a declarative data format with a Go implementation (standard library onl
 
 ADRs live in `docs/ADR/` and are validated with DocDag v0.5 (`docdag.yaml`). Create a record with `docdag new "<english title>" [--depends-on NNNN]`, then write the body in Japanese following `docs/ADR/template.md`. Run `docdag validate` before committing an ADR.
 
+- Ground ADR rationale (`## 根拠（調査結果・出典）`) in LKAL's own invariants, formal properties, and measurements. Do not casually cite external products or languages as corroboration.
+- If prior art is genuinely referenced (such as Zig in the spec draft), verify its true origin, cite the primary specification URL, represent its semantics accurately, and respect license / clean-room boundaries.
+
 ## agy-orch-mcp delegation
 
 The `agy_orch` MCP server (batch + fetch enabled) is configured in the gitignored `.mcp.json`. The workflow is in `docs/ADR/0003-*.md`. In short:
