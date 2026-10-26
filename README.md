@@ -56,7 +56,7 @@ go get github.com/Kaikei-e/LKAL
 go install github.com/Kaikei-e/LKAL/cmd/lkal@latest
 ```
 
-Requires Go 1.27 or later (LKAL-JSON uses `encoding/json/jsontext`).
+Requires Go 1.27.3 or later (LKAL-JSON uses `encoding/json/jsontext`).
 
 ## Usage
 

@@ -4,7 +4,7 @@ This file provides guidance to host agents (Claude Code or Codex) when working w
 
 ## Repository status
 
-LKAL is a declarative data format with a Go implementation (standard library only, Go 1.27 for `encoding/json/jsontext`). The spec draft v0.1 lives in `docs/internal/` and is gitignored, so it never appears in commits or in agy batch worktrees. Implemented: lexer, parser, AST, data model, semantic validation, error reporting, Equal (ADR 0001–0002), LKAL-JSON (0004, 0008), the canonical form (0005), path operations (0006), the `lkal` command (0007) and the 1000-level nesting limit (0009). Out of scope for v0.1: `Unmarshal` with `lkal:"name"` tags and per-document schemas.
+LKAL is a declarative data format with a Go implementation (standard library only, Go 1.27.3 for `encoding/json/jsontext`). The spec draft v0.1 lives in `docs/internal/` and is gitignored, so it never appears in commits or in agy batch worktrees. Implemented: lexer, parser, AST, data model, semantic validation, error reporting, Equal (ADR 0001–0002), LKAL-JSON (0004, 0008), the canonical form (0005), path operations (0006), the `lkal` command (0007) and the 1000-level nesting limit (0009). Out of scope for v0.1: `Unmarshal` with `lkal:"name"` tags and per-document schemas.
 
 ## Verification commands
 

@@ -56,7 +56,7 @@ go get github.com/Kaikei-e/LKAL
 go install github.com/Kaikei-e/LKAL/cmd/lkal@latest
 ```
 
-Go 1.27 以降が必要です（LKAL-JSON で `encoding/json/jsontext` を使用）。
+Go 1.27.3 以降が必要です（LKAL-JSON で `encoding/json/jsontext` を使用）。
 
 ## 使い方
 
