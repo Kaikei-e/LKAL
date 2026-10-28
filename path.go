@@ -51,7 +51,7 @@ func (f *File) Set(path string, v Value) error {
 	}
 
 	entryDepth := targetDepth + len(remSegs) - 1
-	if entryDepth >= maxBlockDepth {
+	if entryDepth > maxBlockDepth {
 		return pathError(f.name, "L403", errorHints["L107"])
 	}
 	if hint := validateValue(v, entryDepth+1); hint != "" {

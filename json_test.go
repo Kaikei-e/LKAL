@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func jsonTDecodeTokens(data []byte) ([]json.Token, error) {
@@ -1837,16 +1838,15 @@ func FuzzFromJSON(f *testing.F) {
 		[]byte("\xff\xfe\xfd\x00\x01"),
 	}
 
-	validJSONs, _ := filepath.Glob(filepath.Join("testdata", "conformance", "valid", "*.json"))
-	for _, p := range validJSONs {
-		data, err := os.ReadFile(p)
-		if err == nil {
-			seeds = append(seeds, data)
-		}
-	}
-
 	for _, seed := range seeds {
 		f.Add(seed)
+	}
+	for _, b := range fuzzLoadSeedFiles(
+		filepath.Join("testdata", "conformance", "valid", "*.json"),
+		filepath.Join("testdata", "fromjson", "*.json"),
+		filepath.Join("testdata", "conformance", "json-invalid", "*.json"),
+	) {
+		f.Add(b)
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -1855,10 +1855,36 @@ func FuzzFromJSON(f *testing.F) {
 			if g == nil {
 				t.Fatalf("FromJSON returned nil File with nil error")
 			}
+			if !json.Valid(data) {
+				t.Fatalf("FromJSON succeeded on invalid JSON per encoding/json.Valid: %q", data)
+			}
+			if g.Version() != "0.1" {
+				t.Fatalf("FromJSON Version() = %q, want 0.1", g.Version())
+			}
+
 			j, err := ToJSON(g, false)
 			if err != nil {
 				t.Fatalf("ToJSON failed on parsed file: %v", err)
 			}
+			wantJ, err := fuzzExpectedJSON(g.Version(), g.Data(), false)
+			if err != nil {
+				t.Fatalf("fuzzExpectedJSON(false) failed: %v", err)
+			}
+			if !bytes.Equal(j, wantJ) {
+				t.Fatalf("ToJSON(g, false) != fuzzExpectedJSON:\ngot:\n%s\nwant:\n%s", j, wantJ)
+			}
+			jPlain, err := ToJSON(g, true)
+			if err != nil {
+				t.Fatalf("ToJSON(g, true) failed: %v", err)
+			}
+			wantPlain, err := fuzzExpectedJSON(g.Version(), g.Data(), true)
+			if err != nil {
+				t.Fatalf("fuzzExpectedJSON(true) failed: %v", err)
+			}
+			if !bytes.Equal(jPlain, wantPlain) {
+				t.Fatalf("ToJSON(g, true) != fuzzExpectedJSON:\ngot:\n%s\nwant:\n%s", jPlain, wantPlain)
+			}
+
 			g2, err := FromJSON(j)
 			if err != nil {
 				t.Fatalf("FromJSON failed on roundtrip JSON: %v", err)
@@ -1869,6 +1895,9 @@ func FuzzFromJSON(f *testing.F) {
 			if !Equal(g2.Data(), g.Data()) {
 				t.Errorf("Equal(g2.Data(), g.Data()) = false")
 			}
+			if !fuzzSameValue(g2.Data(), g.Data()) {
+				t.Errorf("strict Data() field-order mismatch on JSON roundtrip")
+			}
 			j2, err := ToJSON(g2, false)
 			if err != nil {
 				t.Fatalf("second ToJSON failed: %v", err)
@@ -1876,51 +1905,44 @@ func FuzzFromJSON(f *testing.F) {
 			if !bytes.Equal(j2, j) {
 				t.Errorf("roundtrip ToJSON is not byte-stable")
 			}
+
+			fmtOut := g.Format()
+			if reason := fuzzCanonicalLint(fmtOut); reason != "" {
+				t.Fatalf("g.Format() failed canonical lint (%s):\n%s", reason, fmtOut)
+			}
+			fFmt, err := Parse("", fmtOut)
+			if err != nil {
+				t.Fatalf("Parse(g.Format()) failed: %v\n%s", err, fmtOut)
+			}
+			if !Equal(fFmt.Data(), g.Data()) {
+				t.Fatalf("Equal(Parse(g.Format()).Data(), g.Data()) = false")
+			}
+			if !fuzzSameValue(fFmt.Data(), g.Data()) {
+				t.Fatalf("strict Data() mismatch between Parse(g.Format()) and g")
+			}
+			fuzzCheckEqualLaws(t, g.Data(), g2.Data(), fFmt.Data())
 			return
 		}
 
 		if g != nil {
 			t.Errorf("FromJSON returned non-nil File on error: %v", g)
 		}
-		errList, ok := err.(*ErrorList)
-		if !ok {
-			t.Fatalf("expected *ErrorList, got %T: %v", err, err)
+		errList := fuzzCheckErrorList(t, err, "", data, jsonTIsKnownJSONErrorCode)
+
+		n301 := 0
+		for _, e := range errList.Errors {
+			if e.Code == "L301" {
+				n301++
+			}
 		}
-		if errList == nil || len(errList.Errors) == 0 {
-			t.Fatalf("expected non-empty ErrorList")
+		if n301 > 1 {
+			t.Errorf("FromJSON emitted %d L301 errors, want at most 1", n301)
 		}
-		if len(errList.Errors) > 20 {
-			t.Errorf("error count %d not in [1, 20]", len(errList.Errors))
+		if !json.Valid(data) && len(errList.Errors) < 20 && n301 != 1 {
+			t.Errorf("FromJSON on invalid JSON (%q) emitted %d L301 errors (total %d), want 1", data, n301, len(errList.Errors))
 		}
-		for i, e := range errList.Errors {
-			if e == nil {
-				t.Fatalf("nil error at index %d", i)
-			}
-			if e.File != "" {
-				t.Errorf("error File: got %q, want %q", e.File, "")
-			}
-			if !jsonTIsKnownJSONErrorCode(e.Code) {
-				t.Errorf("unknown error code: %q", e.Code)
-			}
-			if e.Msg == "" {
-				t.Errorf("error Msg should not be empty for code %q", e.Code)
-			}
-			if e.Pos.Line < 1 {
-				t.Errorf("invalid error Line %d, want >= 1", e.Pos.Line)
-			}
-			if e.Pos.Col < 1 {
-				t.Errorf("invalid error Col %d, want >= 1", e.Pos.Col)
-			}
-			if i > 0 {
-				prev := errList.Errors[i-1]
-				if prev != nil {
-					if prev.Pos.Line > e.Pos.Line ||
-						(prev.Pos.Line == e.Pos.Line && prev.Pos.Col > e.Pos.Col) ||
-						(prev.Pos.Line == e.Pos.Line && prev.Pos.Col == e.Pos.Col && prev.Code > e.Code) {
-						t.Errorf("errors not sorted: [%d]=%v:%s vs [%d]=%v:%s", i-1, prev.Pos, prev.Code, i, e.Pos, e.Code)
-					}
-				}
-			}
+		if json.Valid(data) && utf8.Valid(data) && !fuzzHasUnpairedSurrogate(data) && n301 != 0 {
+			t.Errorf("FromJSON emitted L301 on syntactically valid UTF-8 JSON without unpaired surrogates: %q", data)
 		}
 	})
 }

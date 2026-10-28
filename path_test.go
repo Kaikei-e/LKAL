@@ -2645,6 +2645,27 @@ func TestSetDepth(t *testing.T) {
 			pathTCheckEqualAndOrder(t, f.Data(), parsed.Data())
 		})
 	}
+
+	t.Run("scalar_at_depth_1000_succeeds_and_record_fails", func(t *testing.T) {
+		doc1000 := "@lkal \"0.1\"\n" + strings.Repeat("r {\n", 1000) + "x = 1\n" + strings.Repeat("}\n", 1000)
+		path1000 := strings.Repeat("r/", 1000) + "x"
+		f := pathTParse(t, "depth.lkal", doc1000)
+		if err := f.Set(path1000, Int(2)); err != nil {
+			t.Fatalf("Set(depth 1000 scalar) unexpected error: %v", err)
+		}
+		got, err := f.Get(path1000)
+		if err != nil || !Equal(got, Int(2)) {
+			t.Fatalf("Get(depth 1000 scalar) = %v, %v; want 2", got, err)
+		}
+		if err := f.Set(path1000, Record{}); err == nil {
+			t.Fatalf("Set(depth 1000 record) succeeded unexpectedly, want L403")
+		} else {
+			pathTCheckSingleError(t, err, "depth.lkal", "L403", "invalid value", "nest blocks at most 1000 levels deep")
+		}
+		if err := f.Set(path1000+"/y", Int(3)); err == nil {
+			t.Fatalf("Set(depth 1001 scalar) succeeded unexpectedly, want L403")
+		}
+	})
 }
 
 func TestSetDepthOrder(t *testing.T) {

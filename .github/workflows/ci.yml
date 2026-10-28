@@ -98,6 +98,10 @@ jobs:
           - FuzzParse
           - FuzzFormat
           - FuzzFromJSON
+          - FuzzEqual
+          - FuzzParseValue
+          - FuzzPath
+          - FuzzStructured
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -116,7 +120,7 @@ jobs:
           FUZZ_TARGET: ${{ matrix.target }}
         run: |
           case "${FUZZ_TARGET}" in
-            FuzzParse|FuzzFormat|FuzzFromJSON) ;;
+            FuzzParse|FuzzFormat|FuzzFromJSON|FuzzEqual|FuzzParseValue|FuzzPath|FuzzStructured) ;;
             *) echo "Unknown fuzz target: ${FUZZ_TARGET}" >&2; exit 1 ;;
           esac
           pkg_dir="$(grep -rl "func ${FUZZ_TARGET}(" . --include='*_test.go' | head -n 1 | xargs dirname)"

@@ -899,6 +899,7 @@ func FuzzFormat(f *testing.F) {
 		"@lkal \"0.1\"\na = 1\n",
 		"@lkal \"0.1\"\na = 1, b = [1,\n  2]\nc { x = \"p\\nq\" }\n",
 		"@lkal \"0.1\"\nservice \"web\" { port = 8080 }\n",
+		"@lkal \"0.1\"\nroute \"GET\" \"/users\" { handler = \"list\", auth = true }\nenv \"LOG_LEVEL\" = \"info\"\n",
 		"@lkal \"0.1\"\n### comment\na = \"hello\"\n",
 		"@lkal \"0.1\"\na = 1\na = 2\n",
 		"@lkal \"0.1\"\n### a\x01b\n",
@@ -906,6 +907,14 @@ func FuzzFormat(f *testing.F) {
 	}
 	for _, s := range seeds {
 		f.Add([]byte(s))
+	}
+	for _, b := range fuzzLoadSeedFiles(
+		filepath.Join("testdata", "conformance", "valid", "*.lkal"),
+		filepath.Join("testdata", "conformance", "plain", "*.lkal"),
+		filepath.Join("testdata", "format", "*.lkal"),
+		filepath.Join("testdata", "conformance", "invalid", "*.lkal"),
+	) {
+		f.Add(b)
 	}
 
 	f.Fuzz(func(t *testing.T, src []byte) {
@@ -936,6 +945,12 @@ func FuzzFormat(f *testing.F) {
 		if out == nil {
 			t.Fatalf("Format returned nil bytes on valid input")
 		}
+		if !bytes.Equal(out, fOrig.Format()) {
+			t.Fatalf("Format(src) != fOrig.Format()")
+		}
+		if reason := fuzzCanonicalLint(out); reason != "" {
+			t.Fatalf("Format output failed canonical lint (%s):\n%s", reason, out)
+		}
 
 		out2, err := Format(out)
 		if err != nil {
@@ -959,6 +974,9 @@ func FuzzFormat(f *testing.F) {
 		if !Equal(fFmt.Data(), fOrig.Data()) {
 			t.Fatalf("Data mismatch between original and formatted")
 		}
+		if !fuzzSameValue(fFmt.Data(), fOrig.Data()) {
+			t.Fatalf("strict Data() field-order mismatch between original and formatted")
+		}
 
 		jOrig, err := ToJSON(fOrig, false)
 		if err != nil {
@@ -979,9 +997,20 @@ func FuzzFormat(f *testing.F) {
 		if fFromJSON == nil {
 			t.Fatalf("FromJSON returned nil File")
 		}
+		if !Equal(fFromJSON.Data(), fOrig.Data()) {
+			t.Fatalf("Equal(fFromJSON.Data(), fOrig.Data()) = false")
+		}
+		if !fuzzSameValue(fFromJSON.Data(), fOrig.Data()) {
+			t.Fatalf("strict Data() mismatch after FromJSON")
+		}
+		fuzzCheckEqualLaws(t, fOrig.Data(), fFmt.Data(), fFromJSON.Data())
+
 		fromJSONFmt := fFromJSON.Format()
 		if fromJSONFmt == nil {
 			t.Fatalf("fFromJSON.Format() returned nil bytes")
+		}
+		if reason := fuzzCanonicalLint(fromJSONFmt); reason != "" {
+			t.Fatalf("fFromJSON.Format() failed canonical lint (%s):\n%s", reason, fromJSONFmt)
 		}
 		fromJSONFmt2, err := Format(fromJSONFmt)
 		if err != nil {
