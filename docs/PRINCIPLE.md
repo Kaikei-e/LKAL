@@ -102,5 +102,5 @@ A change to the language or library must satisfy all of the following:
 1. Lexing stays line-local and parsing stays `LL(1)` (one-token lookahead).
 2. The data model stays within the nine `Value` types.
 3. Types and `Equal` depend only on the document text, never on a schema.
-4. `Format(Format(x)) == Format(x)` and `Equal(FromJSON(ToJSON(f, false)).Data(), f.Data())` hold for every valid `File`.
+4. `Format(Format(x)) == Format(x)`, `Equal(Parse("", f.Format()).Data(), f.Data())`, and `Equal(FromJSON(ToJSON(f, false)).Data(), f.Data())` hold for every valid `File`.
 5. `Get`, `Set`, and `Delete` work on any path in any valid `File`, including empty blocks and stdin/stdout streams (`-`).

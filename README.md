@@ -119,6 +119,10 @@ go vet ./...
 go test -run '^$' -fuzz=FuzzParse -fuzztime=30s
 go test -run '^$' -fuzz=FuzzFormat -fuzztime=30s
 go test -run '^$' -fuzz=FuzzFromJSON -fuzztime=30s
+go test -run '^$' -fuzz=FuzzEqual -fuzztime=30s
+go test -run '^$' -fuzz=FuzzParseValue -fuzztime=30s
+go test -run '^$' -fuzz=FuzzPath -fuzztime=30s
+go test -run '^$' -fuzz=FuzzStructured -fuzztime=30s
 ```
 
 Design principles are in [`docs/PRINCIPLE.md`](docs/PRINCIPLE.md); architecture decision records are in [`docs/ADR`](docs/ADR) (validated with [DocDag](https://github.com/Kaikei-e/DocDag)).

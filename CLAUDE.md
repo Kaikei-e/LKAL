@@ -12,7 +12,7 @@ LKAL is a declarative data format with a Go implementation (standard library onl
 - `go test -short ./...` skips the timing checks
 - `go test -run TestX ./...`
 - `go vet ./...`
-- `go test -run '^$' -fuzz=FuzzParse -fuzztime=30s -parallel=2` (also `FuzzFormat`, `FuzzFromJSON`)
+- `go test -run '^$' -fuzz=FuzzParse -fuzztime=30s -parallel=2` (also `FuzzFormat`, `FuzzFromJSON`, `FuzzEqual`, `FuzzParseValue`, `FuzzPath`, `FuzzStructured`)
 
 ## Decision records
 

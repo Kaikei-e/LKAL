@@ -119,6 +119,10 @@ go vet ./...
 go test -run '^$' -fuzz=FuzzParse -fuzztime=30s
 go test -run '^$' -fuzz=FuzzFormat -fuzztime=30s
 go test -run '^$' -fuzz=FuzzFromJSON -fuzztime=30s
+go test -run '^$' -fuzz=FuzzEqual -fuzztime=30s
+go test -run '^$' -fuzz=FuzzParseValue -fuzztime=30s
+go test -run '^$' -fuzz=FuzzPath -fuzztime=30s
+go test -run '^$' -fuzz=FuzzStructured -fuzztime=30s
 ```
 
 設計原則は [`docs/PRINCIPLE.md`](docs/PRINCIPLE.md)、設計上の意思決定は [`docs/ADR`](docs/ADR)（[DocDag](https://github.com/Kaikei-e/DocDag) で検証）に記録されています。
