@@ -1,6 +1,6 @@
 ---
 title: "基礎の実装を agy-orch-mcp の antigravity_batch に委譲し、テストを先に書いて RED と GREEN を別コミットにする"
-status: accepted
+status: superseded
 date: 2026-10-12
 depends-on: ["0001", "0002"]
 ---
