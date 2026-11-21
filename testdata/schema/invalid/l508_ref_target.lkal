@@ -1,0 +1,4 @@
+@lkal "0.1"
+
+secret = &config/db
+backup = &secret-other/prod

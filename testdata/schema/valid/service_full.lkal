@@ -1,0 +1,36 @@
+@lkal "0.1"
+
+service "web" {
+  replicas = 3
+  traffic-share = 0.25
+  labels {
+    app = "web"
+    env = "prod"
+  }
+  container "app" {
+    image = "ghcr.io/example/web:1.2.0"
+    args = ["--listen", ":8080"]
+    memory = 512Mi
+    timeout = 15s
+    port "http" { number = 8080, protocol = .tcp }
+    secret = &secret/web-tls
+  }
+  plugin "auth" {
+    order = 1
+    issuer = "internal"
+  }
+  plugin "rate-limit" {
+    order = 2
+    burst = 100
+  }
+  startup = "legacy-hook"
+}
+
+service "worker" {
+  traffic-share = 1
+  container "runner" {
+    image = "ghcr.io/example/worker:1.2.0"
+    memory = 1Gi
+    port "metrics" { number = 9090 }
+  }
+}

@@ -1,0 +1,5 @@
+@lkal "0.1"
+
+replicas = "3"
+ratio = true
+weight = 2.0

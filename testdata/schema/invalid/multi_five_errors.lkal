@@ -1,0 +1,6 @@
+@lkal "0.1"
+
+replicas = 20
+protocol = .http
+port = 70000
+replica = 2

@@ -1,0 +1,8 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "memory" { type = .quantity, units = ["Mi", "Gi"] }
+  field "timeout" { type = .quantity, units = ["ms", "s", "m"] }
+}

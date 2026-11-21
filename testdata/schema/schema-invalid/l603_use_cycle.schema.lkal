@@ -1,0 +1,10 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+def "a" { use = &def/b }
+def "b" { use = &def/a }
+
+root {
+  field "x" { use = &def/a }
+}

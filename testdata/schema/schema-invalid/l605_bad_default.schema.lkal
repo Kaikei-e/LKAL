@@ -1,0 +1,16 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "replicas" {
+    type = .int
+    min = 1
+    max = 10
+    default = 20
+  }
+  field "label" {
+    type = .string
+    default = 42
+  }
+}

@@ -1,0 +1,7 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "version" { type = .string, pattern = "[0-9]+\\.[0-9]+\\.[0-9]+" }
+}

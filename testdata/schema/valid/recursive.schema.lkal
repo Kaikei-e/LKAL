@@ -1,0 +1,17 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "tree" { required = true, use = &def/node }
+}
+
+def "node" {
+  type = .record
+  field "label" { required = true, type = .string }
+  field "fallback" { use = &def/node }
+  field "children" {
+    type = .map
+    value { use = &def/node }
+  }
+}

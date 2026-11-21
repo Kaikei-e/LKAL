@@ -1,0 +1,17 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "port" {
+    type = .map
+    value { use = &def/port }
+  }
+}
+
+def "port" {
+  type = .record
+  reserved = ["proto"]
+  field "number" { required = true, type = .int, min = 1, max = 65535 }
+  field "protocol" { type = .enum, values = [.tcp, .udp], default = .tcp }
+}

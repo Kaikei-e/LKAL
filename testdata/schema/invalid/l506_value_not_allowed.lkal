@@ -1,0 +1,5 @@
+@lkal "0.1"
+
+protocol = .http
+env = "staging"
+tier = 9

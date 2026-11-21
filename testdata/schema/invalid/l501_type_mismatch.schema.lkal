@@ -1,0 +1,9 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "replicas" { type = .int }
+  field "ratio" { types = [.int, .decimal] }
+  field "weight" { type = .int }
+}

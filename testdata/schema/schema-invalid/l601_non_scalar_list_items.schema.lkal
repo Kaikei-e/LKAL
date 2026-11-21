@@ -1,0 +1,19 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+def "entry" {
+  type = .record
+  field "name" { type = .string }
+}
+
+root {
+  field "direct" {
+    type = .list
+    items { type = .record }
+  }
+  field "via-def" {
+    type = .list
+    items { use = &def/entry }
+  }
+}

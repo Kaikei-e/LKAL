@@ -1,0 +1,7 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "item" { use = &def/missing }
+}

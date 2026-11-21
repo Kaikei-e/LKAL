@@ -86,6 +86,14 @@ The syntax tree, data model, LKAL-JSON, and path edits (`Get`, `Set`, `Delete`) 
 - `ToJSON(f, false)` and `FromJSON` round-trip all nine value types without loss of data model information, using four reserved `$` keys (`$lkal`, `$enum`, `$qty`, `$ref`). User keys and labels starting with `$` are rejected (`L205`).
 - `Set` and `Delete` edit the syntax tree at a `/` path while keeping comments and layout on untouched entries. Adding a multi-segment path to an empty block writes a labeled entry; deleting the last entry leaves a valid block that `Set` can populate again.
 
+## 8. External, Declarative Schemas
+
+Schemas validate values without altering core language semantics:
+
+- **Schemas are ordinary LKAL documents**: A v0.2 schema is a valid `@lkal "0.1"` document with `lkal-schema = "0.2"`, `root`, and optional `def "<name>"` blocks, validated against the self-describing meta-schema (`meta.lkal`). Data documents remain `@lkal "0.1"` and bind to schemas externally (`--schema` or the `schema` package), never through in-band directives.
+- **One-way package isolation**: Schema compilation (`L601`–`L607`), validation (`L501`–`L510`), and default completion live in `github.com/Kaikei-e/LKAL/schema`, importing the root `lkal` package one-way. The root package exposes only read-only source lookup (`(*File).Name`, `(*File).Locate`) and `Error.Path`, ensuring at compile time that `Parse`, `Format`, `Equal`, `ToJSON`, and `FromJSON` never depend on a schema.
+- **No implicit default injection**: Field `default` values declared in a schema are never implicitly injected by `Parse`, `Validate`, `Format`, `Equal`, or `ToJSON`. Defaults are inspected via `(*Schema).Default(path)` or materialized immutably on data values via `(*Schema).Complete(v)` (which populates missing optional fields only when their parent `Record` already exists).
+
 ## Out of Scope
 
 LKAL leaves out features that break static reading, path addressing, or deterministic in-place edits:
@@ -93,7 +101,7 @@ LKAL leaves out features that break static reading, path addressing, or determin
 - **Computation**: variables, expressions, conditionals, loops, string interpolation, and templates.
 - **Multi-file or implicit composition**: includes, anchors, inheritance, and implicit overrides.
 - **Positional object lists**: lists contain scalars only.
-- **Schema-dependent semantics**: a schema (planned for v0.2) may validate values, but it must never change how a document is parsed, formatted, or compared with `Equal`.
+- **Schema-dependent semantics**: a schema (`github.com/Kaikei-e/LKAL/schema`) validates values and provides explicit default completion, but it must never change how a document is parsed, formatted, converted to or from JSON, or compared with `Equal`.
 
 ## Checklist for Changes
 
@@ -101,6 +109,6 @@ A change to the language or library must satisfy all of the following:
 
 1. Lexing stays line-local and parsing stays `LL(1)` (one-token lookahead).
 2. The data model stays within the nine `Value` types.
-3. Types and `Equal` depend only on the document text, never on a schema.
+3. Types, `Format`, `ToJSON`, `FromJSON`, and `Equal` depend only on the document text, never on a schema; the root `lkal` package never imports `schema`.
 4. `Format(Format(x)) == Format(x)`, `Equal(Parse("", f.Format()).Data(), f.Data())`, and `Equal(FromJSON(ToJSON(f, false)).Data(), f.Data())` hold for every valid `File`.
 5. `Get`, `Set`, and `Delete` work on any path in any valid `File`, including empty blocks and stdin/stdout streams (`-`).

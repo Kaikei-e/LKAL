@@ -1,0 +1,10 @@
+@lkal "0.1"
+
+member {
+  a = "too-short"
+  "BAD!" = "bad-pattern"
+}
+
+region {
+  ap = 1
+}

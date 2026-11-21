@@ -31,7 +31,7 @@ service "web" {
 }
 ```
 
-This repository holds the Go reference implementation: a parser with semantic validation, the canonical formatter, LKAL-JSON conversion, path operations, and the `lkal` command. It uses only the standard library. The format is at **draft v0.1** and may change.
+This repository holds the Go reference implementation: a parser with semantic validation, the canonical formatter, LKAL-JSON conversion, path operations, the v0.2 schema validator (`github.com/Kaikei-e/LKAL/schema`), and the `lkal` command. It uses only the standard library. The format is at **draft v0.2** (core document syntax `@lkal "0.1"`, schema language `lkal-schema = "0.2"`) and may change.
 
 ## Values
 
@@ -71,7 +71,7 @@ if err != nil {
 data := f.Data() // lkal.Record
 ```
 
-`Parse`, `Format`, `FromJSON`, `ParseValue`, `Get`, `Set`, and `Delete` return `*lkal.ErrorList` (`Errors []*lkal.Error`), reporting up to 20 errors sorted by 1-based line and Unicode code point column (`Pos{Line, Col}`). Each error has a stable code and a hint:
+`Parse`, `Format`, `FromJSON`, `ParseValue`, `Get`, `Set`, `Delete`, and `schema` operations return `*lkal.ErrorList` (`Errors []*lkal.Error`), reporting up to 20 errors sorted by 1-based line and Unicode code point column (`Pos{Line, Col}`, followed by unlocated errors sorted by `Path`). Each error has a stable code, an optional logical `Path` (rendered as `path: <Path>` when non-empty), and a hint:
 
 ```text
 bad.lkal:2:12: L102 bare word in value position
@@ -87,35 +87,53 @@ Error codes are grouped by stage:
 | `L201`–`L207` | Semantic | duplicate key or conflicting path (`L201`), mixed-type list (`L204`), `$`-prefixed key or label (`L205`), unsupported version (`L207`) |
 | `L301`–`L305` | LKAL-JSON | invalid JSON (`L301`), `null` (`L302`), exponent notation (`L303`), non-scalar list element (`L304`), malformed `$enum` / `$qty` / `$ref` tag (`L305`) |
 | `L401`–`L403` | Path / Value | malformed path (`L401`), path not found (`L402`), invalid `Value` for `Set` (`L403`) |
+| `L501`–`L510` | Schema Validation | type mismatch (`L501`), missing required field (`L502`), unknown or reserved field (`L503`), value out of range (`L504`), pattern mismatch (`L505`), value not allowed (`L506`), unit not allowed (`L507`), reference target not allowed (`L508`), duplicate value (`L509`), invalid map key (`L510`) |
+| `L601`–`L607` | Schema Compile | invalid schema (`L601`), unresolved definition (`L602`), definition cycle (`L603`), invalid pattern (`L604`), default does not match its type (`L605`), conflicting constraints (`L606`), unsupported schema version (`L607`) |
 
-The rest of the API works on a parsed `*lkal.File` or `lkal.Value`:
+The rest of the core API works on a parsed `*lkal.File` or `lkal.Value`:
 
 | Function | Purpose |
 | --- | --- |
-| `f.Version()`, `f.Data()` | Document version (`"0.1"`) and `Record` data model |
+| `f.Name()`, `f.Version()`, `f.Data()` | Source filename, document version (`"0.1"`), and `Record` data model |
 | `lkal.Format(src)`, `f.Format()` | Canonical form (idempotent; keeps comments, blank lines, one-line blocks, and labels) |
 | `lkal.ToJSON(f, plain)` | LKAL-JSON (`plain = false`, reversible with `"$lkal"`) or one-way plain JSON (`plain = true`, unwraps `$enum`, `$qty`, `$ref` to strings) |
 | `lkal.FromJSON(src)` | Read LKAL-JSON back into a `*lkal.File` |
 | `f.Get(path)`, `f.Set(path, v)`, `f.Delete(path)` | Read and edit one value by `/` path, e.g. `service/web/container/app/image`; comments and untouched layout are kept |
+| `f.Locate(path)` | Read-only lookup mapping a segmented path (`[]string`) to source positions (`Location{Key, Value, Elems}`) |
 | `lkal.ParseValue(src)`, `lkal.FormatValue(v)` | Parse and format a single value (scalars, lists, `\\` lines, or `{ … }` records) as used by `lkal get` and `lkal set` |
 | `lkal.Equal(a, b)` | Schema-free semantic equality (record field order is ignored; list order is kept) |
+
+### Schema Validation (`github.com/Kaikei-e/LKAL/schema`)
+
+Schemas are `@lkal "0.1"` documents (`lkal-schema = "0.2"`, `root { … }`, optional `def "<name>" { … }`) compiled and validated through the isolated `schema` subpackage:
+
+| Function | Purpose |
+| --- | --- |
+| `schema.Compile(name, src)`, `schema.CompileFile(f)` | Validate a schema against `meta.lkal` and compile it into an immutable `*schema.Schema` (`L601`–`L607`) |
+| `s.ID()`, `s.Version()` | Declared top-level `id` and `version` metadata strings |
+| `s.Validate(f)`, `s.ValidateValue(v)` | Validate a `*lkal.File` (with source positions and `Error.Path`) or an arbitrary `lkal.Value` (`L501`–`L510`) |
+| `s.Default(path)` | Look up the declared default `lkal.Value` for a schema `/` path |
+| `s.Complete(v)` | Return a new `lkal.Value` with missing optional fields populated with their declared defaults when their parent `Record` already exists (idempotent; never mutates `v`) |
 
 ## Command
 
 ```text
 lkal fmt [-w] [-l] [--json] FILE…
-lkal check [--json] FILE…
+lkal check [--schema SCHEMA] [--json] FILE…
+lkal schema check [--json] FILE…
 lkal json [-plain] [--json] FILE
 lkal from-json [--json] FILE
 lkal get [-r] [--json] FILE PATH
-lkal set [--json] FILE PATH VALUE
+lkal set [--schema SCHEMA] [--json] FILE PATH VALUE
 lkal del [--json] FILE PATH
 ```
 
-Every command accepts `--json` (or `-json`) to print errors as a single-line JSON array (`[{"file","line","col","code","message","hint"}]`) on stderr. Passing `-` as `FILE` reads from standard input (`set -` and `del -` write the updated canonical LKAL to stdout; `fmt -w -` is an error). `get -r` prints `String`, `Enum`, and `Ref` values in raw form (without quotes, leading `.`, or leading `&`). Exit codes: `0` success, `1` LKAL errors, `2` usage or I/O errors.
+Every command accepts `--json` (or `-json`) to print errors as a single-line JSON array (`[{"file","line","col","code","message","hint"}]`, including `"path"` when non-empty) on stderr. `lkal check --schema SCHEMA` validates each parsed file against `SCHEMA`; `lkal set --schema SCHEMA` validates the modified file in memory before writing to disk or stdout; `lkal schema check` validates schema definitions standalone. Passing `-` as `FILE` reads from standard input (`set -` and `del -` write the updated canonical LKAL to stdout; `fmt -w -` is an error). `get -r` prints `String`, `Enum`, and `Ref` values in raw form (without quotes, leading `.`, or leading `&`). Exit codes: `0` success, `1` LKAL or schema errors, `2` usage or I/O errors.
 
 ```sh
-lkal set web.lkal service/web/container/app/image '"ghcr.io/acme/web:1.5.0"'
+lkal schema check app.schema.lkal
+lkal check --schema app.schema.lkal web.lkal
+lkal set --schema app.schema.lkal web.lkal service/web/container/app/image '"ghcr.io/acme/web:1.5.0"'
 lkal get web.lkal service/web/container/app/port/http/number   # 8080
 lkal get -r web.lkal service/web/container/app/image           # ghcr.io/acme/web:1.5.0
 ```
@@ -134,6 +152,8 @@ go test -run '^$' -fuzz=FuzzEqual -fuzztime=30s
 go test -run '^$' -fuzz=FuzzParseValue -fuzztime=30s
 go test -run '^$' -fuzz=FuzzPath -fuzztime=30s
 go test -run '^$' -fuzz=FuzzStructured -fuzztime=30s
+go test -run '^$' -fuzz=FuzzCompile -fuzztime=30s ./schema
+go test -run '^$' -fuzz=FuzzValidate -fuzztime=30s ./schema
 ```
 
 Design principles are in [`docs/PRINCIPLE.md`](docs/PRINCIPLE.md); architecture decision records are in [`docs/ADR`](docs/ADR) (validated with [DocDag](https://github.com/Kaikei-e/DocDag)).

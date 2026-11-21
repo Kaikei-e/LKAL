@@ -1,11 +1,14 @@
 package lkal
 
+import "sync/atomic"
+
 type File struct {
 	name       string
 	version    string
 	versionPos Pos
 	head       []comment
 	body       *block
+	locIndex   atomic.Pointer[locNode]
 }
 
 type block struct {

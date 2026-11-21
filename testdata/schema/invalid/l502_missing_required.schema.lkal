@@ -1,0 +1,13 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "name" { required = true, type = .string }
+  field "server" {
+    required = true
+    type = .record
+    field "host" { required = true, type = .string }
+    field "port" { required = true, type = .int }
+  }
+}

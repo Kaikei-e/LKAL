@@ -1,0 +1,14 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "replicas" { type = .int }
+  field "port" {
+    type = .record
+    open = true
+    reserved = ["proto"]
+    field "number" { type = .int }
+    field "protocol" { type = .enum, values = [.tcp, .udp] }
+  }
+}

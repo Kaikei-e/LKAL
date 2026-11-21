@@ -31,7 +31,7 @@ service "web" {
 }
 ```
 
-このリポジトリは LKAL の Go リファレンス実装（意味規則の検査を含むパーサー、正準フォーマッタ、LKAL-JSON 変換、パス操作、`lkal` コマンド）を提供します。標準ライブラリのみで実装されています。仕様は **ドラフト v0.1** であり、変更される可能性があります。
+このリポジトリは LKAL の Go リファレンス実装（意味規則の検査を含むパーサー、正準フォーマッタ、LKAL-JSON 変換、パス操作、v0.2 スキーマ検証パッケージ `github.com/Kaikei-e/LKAL/schema`、および `lkal` コマンド）を提供します。標準ライブラリのみで実装されています。仕様は **ドラフト v0.2**（コア文書構文 `@lkal "0.1"`、スキーマ言語 `lkal-schema = "0.2"`）であり、変更される可能性があります。
 
 ## 値の型
 
@@ -71,7 +71,7 @@ if err != nil {
 data := f.Data() // lkal.Record
 ```
 
-`Parse`、`Format`、`FromJSON`、`ParseValue`、`Get`、`Set`、`Delete` はエラー時に `*lkal.ErrorList`（`Errors []*lkal.Error`）を返し、1 始まりの行番号と Unicode コードポイント列番号（`Pos{Line, Col}`）の順に最大 20 件のエラーを報告します。各エラーは固定のコードと修正のヒントを持ちます。
+`Parse`、`Format`、`FromJSON`、`ParseValue`、`Get`、`Set`、`Delete`、および `schema` パッケージの各関数はエラー時に `*lkal.ErrorList`（`Errors []*lkal.Error`）を返し、1 始まりの行番号と Unicode コードポイント列番号（`Pos{Line, Col}`、位置のないエラーはその後に `Path` 順）で最大 20 件のエラーを報告します。各エラーは固定のコード、任意の論理パス `Path`（空でないとき `path: <Path>` として表示）、および修正のヒントを持ちます。
 
 ```text
 bad.lkal:2:12: L102 bare word in value position
@@ -87,35 +87,53 @@ bad.lkal:2:12: L102 bare word in value position
 | `L201`–`L207` | 意味規則 | 重複キーまたは経路衝突（`L201`）、型の混在リスト（`L204`）、`$` で始まるキー・ラベル（`L205`）、未対応の版（`L207`） |
 | `L301`–`L305` | LKAL-JSON | 不正な JSON（`L301`）、`null`（`L302`）、指数表記（`L303`）、非スカラーのリスト要素（`L304`）、不正な `$enum` / `$qty` / `$ref` タグ（`L305`） |
 | `L401`–`L403` | パス・値操作 | 不正なパス（`L401`）、存在しないパス（`L402`）、`Set` に渡した不正な `Value`（`L403`） |
+| `L501`–`L510` | スキーマ検証 | 型の不一致（`L501`）、必須フィールド欠落（`L502`）、未知・予約済みフィールド（`L503`）、範囲外の値（`L504`）、正規表現の不一致（`L505`）、許可されていない値（`L506`）、許可されていない単位（`L507`）、許可されていない参照先（`L508`）、重複した値（`L509`）、不正なマップキー（`L510`） |
+| `L601`–`L607` | スキーマ定義 | 不正なスキーマ構造（`L601`）、未定義の参照先（`L602`）、定義の循環（`L603`）、不正な正規表現（`L604`）、デフォルト値の型・制約違反（`L605`）、矛盾する制約（`L606`）、未対応のスキーマ版（`L607`） |
 
-残りの API はパース済みの `*lkal.File` または `lkal.Value` に対して動作します。
+残りのコア API はパース済みの `*lkal.File` または `lkal.Value` に対して動作します。
 
 | 関数 | 用途 |
 | --- | --- |
-| `f.Version()`, `f.Data()` | 文書の版（`"0.1"`）と `Record` データモデルの取得 |
+| `f.Name()`, `f.Version()`, `f.Data()` | ファイル名、文書の版（`"0.1"`）、および `Record` データモデルの取得 |
 | `lkal.Format(src)`, `f.Format()` | 正準形への整形（冪等。コメント・空行・1行ブロック・ラベル記法を保持） |
 | `lkal.ToJSON(f, plain)` | LKAL-JSON（`plain = false`、`"$lkal"` 付きの可逆変換）または一方向の plain JSON（`plain = true`、`$enum`・`$qty`・`$ref` を文字列に展開） |
 | `lkal.FromJSON(src)` | LKAL-JSON から `*lkal.File` への復元 |
 | `f.Get(path)`, `f.Set(path, v)`, `f.Delete(path)` | `/` パス（例: `service/web/container/app/image`）による値の取得・編集。コメントや未編集項目のレイアウトは保持される |
+| `f.Locate(path)` | パス（`[]string`）に対応する構文木上の位置（`Location{Key, Value, Elems}`）を読み取り専用で逆引きする |
 | `lkal.ParseValue(src)`, `lkal.FormatValue(v)` | `lkal get` や `lkal set` で使われる単一の値テキスト（スカラー・リスト・`\\` 行・`{ … }` レコード）の解析・整形 |
 | `lkal.Equal(a, b)` | スキーマ非依存の意味的等価判定（レコードのキー順は無視し、リストの要素順は区別する） |
+
+### スキーマ検証（`github.com/Kaikei-e/LKAL/schema`）
+
+スキーマは通常の `@lkal "0.1"` 文書（`lkal-schema = "0.2"`、`root { … }`、任意の `def "<name>" { … }`）として記述し、独立した `schema` サブパッケージでコンパイル・検証します。
+
+| 関数 | 用途 |
+| --- | --- |
+| `schema.Compile(name, src)`, `schema.CompileFile(f)` | スキーマをメタスキーマ `meta.lkal` で検証し、不変な `*schema.Schema` にコンパイルする（`L601`–`L607`） |
+| `s.ID()`, `s.Version()` | スキーマ先頭に宣言された `id` と `version` メタデータの取得 |
+| `s.Validate(f)`, `s.ValidateValue(v)` | `*lkal.File`（ソース位置および `Error.Path` 付き）または任意の `lkal.Value` を検証する（`L501`–`L510`） |
+| `s.Default(path)` | スキーマ上の `/` パスに宣言された `default` 値（`lkal.Value`）を取得する |
+| `s.Complete(v)` | 親の `Record` がすでに存在する場合に限り、省略された任意フィールドへ宣言的 `default` を補完した新しい `lkal.Value` を返す（冪等・非破壊） |
 
 ## コマンド
 
 ```text
 lkal fmt [-w] [-l] [--json] FILE…
-lkal check [--json] FILE…
+lkal check [--schema SCHEMA] [--json] FILE…
+lkal schema check [--json] FILE…
 lkal json [-plain] [--json] FILE
 lkal from-json [--json] FILE
 lkal get [-r] [--json] FILE PATH
-lkal set [--json] FILE PATH VALUE
+lkal set [--schema SCHEMA] [--json] FILE PATH VALUE
 lkal del [--json] FILE PATH
 ```
 
-すべてのコマンドで `--json`（または `-json`）を付けると、エラーを1行の JSON 配列（`[{"file","line","col","code","message","hint"}]`）として標準エラー出力に出します。`FILE` に `-` を渡すと標準入力から読み込みます（`set -` と `del -` は更新後の正準形 LKAL を標準出力に出し、`fmt -w -` はエラーになります）。`get -r` は `String`、`Enum`、`Ref` の値を引用符や先頭の `.` / `&` なしの生形式で出力します。終了コードは `0` が成功、`1` が LKAL のエラー、`2` が使い方または I/O のエラーです。
+すべてのコマンドで `--json`（または `-json`）を付けると、エラーを1行の JSON 配列（`[{"file","line","col","code","message","hint"}]`、`Path` が空でないときは `"path"` を含む）として標準エラー出力に出します。`lkal check --schema SCHEMA` はパースに成功した各ファイルを `SCHEMA` で検証し、`lkal set --schema SCHEMA` は変更後のファイルをメモリ上で検証してからファイルまたは標準出力へ書き出します。`lkal schema check` はスキーマ文書単体を検証します。`FILE` に `-` を渡すと標準入力から読み込みます（`set -` と `del -` は更新後の正準形 LKAL を標準出力に出し、`fmt -w -` はエラーになります）。`get -r` は `String`、`Enum`、`Ref` の値を引用符や先頭の `.` / `&` なしの生形式で出力します。終了コードは `0` が成功、`1` が LKAL またはスキーマのエラー、`2` が使い方または I/O のエラーです。
 
 ```sh
-lkal set web.lkal service/web/container/app/image '"ghcr.io/acme/web:1.5.0"'
+lkal schema check app.schema.lkal
+lkal check --schema app.schema.lkal web.lkal
+lkal set --schema app.schema.lkal web.lkal service/web/container/app/image '"ghcr.io/acme/web:1.5.0"'
 lkal get web.lkal service/web/container/app/port/http/number   # 8080
 lkal get -r web.lkal service/web/container/app/image           # ghcr.io/acme/web:1.5.0
 ```
@@ -134,6 +152,8 @@ go test -run '^$' -fuzz=FuzzEqual -fuzztime=30s
 go test -run '^$' -fuzz=FuzzParseValue -fuzztime=30s
 go test -run '^$' -fuzz=FuzzPath -fuzztime=30s
 go test -run '^$' -fuzz=FuzzStructured -fuzztime=30s
+go test -run '^$' -fuzz=FuzzCompile -fuzztime=30s ./schema
+go test -run '^$' -fuzz=FuzzValidate -fuzztime=30s ./schema
 ```
 
 設計原則は [`docs/PRINCIPLE.md`](docs/PRINCIPLE.md)、設計上の意思決定は [`docs/ADR`](docs/ADR)（[DocDag](https://github.com/Kaikei-e/DocDag) で検証）に記録されています。

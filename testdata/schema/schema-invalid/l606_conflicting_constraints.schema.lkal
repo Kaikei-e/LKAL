@@ -1,0 +1,16 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "count" {
+    type = .int
+    min = 10
+    max = 5
+  }
+  field "name" {
+    type = .string
+    required = true
+    default = "app"
+  }
+}

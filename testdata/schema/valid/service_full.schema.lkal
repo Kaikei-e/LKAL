@@ -1,0 +1,62 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+id = "example/service-full"
+version = "0.2.0"
+
+root {
+  field "service" {
+    type = .map
+    value { use = &def/service }
+  }
+}
+
+def "service" {
+  type = .record
+  field "replicas" { type = .int, min = 0, max = 10000, default = 1 }
+  field "traffic-share" { types = [.int, .decimal], min = 0, max = 1 }
+  field "labels" {
+    type = .map
+    key { max-length = 63 }
+    value { type = .string }
+  }
+  field "container" {
+    type = .map
+    value { use = &def/container }
+  }
+  field "plugin" {
+    type = .map
+    unique-by = ["order"]
+    value { use = &def/plugin }
+  }
+  field "startup" { type = .string, deprecated = "use container/*/command" }
+}
+
+def "container" {
+  type = .record
+  field "image" { required = true, type = .string, min-length = 1 }
+  field "args" {
+    type = .list
+    max-items = 64
+    items { type = .string }
+  }
+  field "memory" { type = .quantity, units = ["Mi", "Gi"] }
+  field "timeout" { type = .quantity, units = ["ms", "s", "m"], default = 30s }
+  field "port" {
+    type = .map
+    value { use = &def/port }
+  }
+  field "secret" { type = .ref, targets = [&secret] }
+}
+
+def "port" {
+  type = .record
+  field "number" { required = true, type = .int, min = 1, max = 65535 }
+  field "protocol" { type = .enum, values = [.tcp, .udp], default = .tcp }
+}
+
+def "plugin" {
+  type = .record
+  open = true
+  field "order" { required = true, type = .int }
+}

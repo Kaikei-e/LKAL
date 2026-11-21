@@ -1,0 +1,10 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "name" { required = true, type = .string }
+  field "replicas" { type = .int, min = 1, max = 10, default = 1 }
+  field "protocol" { type = .enum, values = [.tcp, .udp] }
+  field "port" { type = .int, min = 1, max = 65535 }
+}

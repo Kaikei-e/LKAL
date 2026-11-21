@@ -1,0 +1,9 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "protocol" { type = .enum, values = [.tcp, .udp] }
+  field "env" { type = .string, one-of = ["dev", "prod"] }
+  field "tier" { type = .int, one-of = [1, 2, 3] }
+}

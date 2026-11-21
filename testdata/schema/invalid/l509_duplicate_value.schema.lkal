@@ -1,0 +1,19 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "tags" {
+    type = .list
+    unique = true
+    items { type = .string }
+  }
+  field "plugin" {
+    type = .map
+    unique-by = ["order"]
+    value {
+      type = .record
+      field "order" { required = true, type = .int }
+    }
+  }
+}

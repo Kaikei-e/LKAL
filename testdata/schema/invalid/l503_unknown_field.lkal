@@ -1,0 +1,8 @@
+@lkal "0.1"
+
+replica = 3
+port {
+  number = 8080
+  proto = .tcp
+  extra = "allowed"
+}

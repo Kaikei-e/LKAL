@@ -93,6 +93,7 @@ func (f *File) Set(path string, v Value) error {
 		}
 		targetBlock.entries = append(targetBlock.entries, newEnt)
 	}
+	f.locIndex.Store(nil)
 	return nil
 }
 
@@ -111,12 +112,14 @@ func (f *File) Delete(path string) error {
 	switch {
 	case exactIdx != -1:
 		removeEntries(targetBlock, exactIdx, exactIdx)
+		f.locIndex.Store(nil)
 		return nil
 	case len(prefixIdxs) > 0:
 		for k := len(prefixIdxs) - 1; k >= 0; k-- {
 			idx := prefixIdxs[k]
 			removeEntries(targetBlock, idx, idx)
 		}
+		f.locIndex.Store(nil)
 		return nil
 	default:
 		return notFoundError(f.name, remSegs[maxPartialLen])

@@ -1,0 +1,8 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  reserved = ["proto"]
+  field "proto" { type = .string }
+}

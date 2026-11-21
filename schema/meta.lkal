@@ -1,0 +1,225 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+id = "lkal:meta/0.2"
+version = "0.2.0"
+doc = "Self-describing meta-schema for LKAL v0.2 schemas."
+
+def "key-spec" {
+  doc = "Constraints on the string keys of a map."
+  type = .record
+  field "doc" { type = .string }
+  field "min-length" { type = .int, min = 0 }
+  field "max-length" { type = .int, min = 0 }
+  field "pattern" { type = .string }
+  field "one-of" {
+    type = .list
+    min-items = 1
+    items { type = .string }
+  }
+}
+
+def "type-spec" {
+  doc = "Specification of a value's type and constraints."
+  type = .record
+  field "doc" { type = .string }
+  field "type" {
+    type = .enum
+    values = [.string, .int, .decimal, .bool, .enum, .quantity, .ref, .list, .record, .map, .any]
+  }
+  field "types" {
+    type = .list
+    min-items = 2
+    unique = true
+    items {
+      type = .enum
+      values = [.string, .int, .decimal, .bool, .enum, .quantity, .ref]
+    }
+  }
+  field "use" {
+    type = .ref
+    targets = [&def]
+    min-segments = 2
+    max-segments = 2
+  }
+  field "min-length" { type = .int, min = 0 }
+  field "max-length" { type = .int, min = 0 }
+  field "pattern" { type = .string }
+  field "one-of" {
+    type = .list
+    min-items = 1
+    items {
+      types = [.string, .int, .decimal]
+    }
+  }
+  field "min" {
+    types = [.int, .decimal]
+  }
+  field "max" {
+    types = [.int, .decimal]
+  }
+  field "values" {
+    doc = "Allowed enum values; validated by the schema compiler as a non-empty list of enums."
+    type = .any
+  }
+  field "units" {
+    type = .list
+    min-items = 1
+    items {
+      type = .string
+      pattern = "[A-Za-z]+"
+    }
+  }
+  field "targets" {
+    type = .list
+    min-items = 1
+    items { type = .ref }
+  }
+  field "min-segments" { type = .int, min = 0 }
+  field "max-segments" { type = .int, min = 1 }
+  field "items" { use = &def/type-spec }
+  field "min-items" { type = .int, min = 0 }
+  field "max-items" { type = .int, min = 0 }
+  field "unique" { type = .bool, default = false }
+  field "field" {
+    type = .map
+    value { use = &def/field-spec }
+  }
+  field "open" { type = .bool, default = false }
+  field "reserved" {
+    type = .list
+    items { type = .string }
+  }
+  field "value" { use = &def/type-spec }
+  field "key" { use = &def/key-spec }
+  field "min-entries" { type = .int, min = 0 }
+  field "max-entries" { type = .int, min = 0 }
+  field "unique-by" {
+    type = .list
+    min-items = 1
+    unique = true
+    items { type = .string }
+  }
+}
+
+def "field-spec" {
+  doc = "Specification of a record field, extending type-spec with field attributes."
+  type = .record
+  field "doc" { type = .string }
+  field "type" {
+    type = .enum
+    values = [.string, .int, .decimal, .bool, .enum, .quantity, .ref, .list, .record, .map, .any]
+  }
+  field "types" {
+    type = .list
+    min-items = 2
+    unique = true
+    items {
+      type = .enum
+      values = [.string, .int, .decimal, .bool, .enum, .quantity, .ref]
+    }
+  }
+  field "use" {
+    type = .ref
+    targets = [&def]
+    min-segments = 2
+    max-segments = 2
+  }
+  field "min-length" { type = .int, min = 0 }
+  field "max-length" { type = .int, min = 0 }
+  field "pattern" { type = .string }
+  field "one-of" {
+    type = .list
+    min-items = 1
+    items {
+      types = [.string, .int, .decimal]
+    }
+  }
+  field "min" {
+    types = [.int, .decimal]
+  }
+  field "max" {
+    types = [.int, .decimal]
+  }
+  field "values" {
+    doc = "Allowed enum values; validated by the schema compiler as a non-empty list of enums."
+    type = .any
+  }
+  field "units" {
+    type = .list
+    min-items = 1
+    items {
+      type = .string
+      pattern = "[A-Za-z]+"
+    }
+  }
+  field "targets" {
+    type = .list
+    min-items = 1
+    items { type = .ref }
+  }
+  field "min-segments" { type = .int, min = 0 }
+  field "max-segments" { type = .int, min = 1 }
+  field "items" { use = &def/type-spec }
+  field "min-items" { type = .int, min = 0 }
+  field "max-items" { type = .int, min = 0 }
+  field "unique" { type = .bool, default = false }
+  field "field" {
+    type = .map
+    value { use = &def/field-spec }
+  }
+  field "open" { type = .bool, default = false }
+  field "reserved" {
+    type = .list
+    items { type = .string }
+  }
+  field "value" { use = &def/type-spec }
+  field "key" { use = &def/key-spec }
+  field "min-entries" { type = .int, min = 0 }
+  field "max-entries" { type = .int, min = 0 }
+  field "unique-by" {
+    type = .list
+    min-items = 1
+    unique = true
+    items { type = .string }
+  }
+  field "required" { type = .bool, default = false }
+  field "default" {
+    doc = "Declarative default value; validated by the schema compiler against the field's compiled type."
+    type = .any
+  }
+  field "deprecated" { type = .string }
+  field "ext" {
+    type = .record
+    open = true
+  }
+}
+
+root {
+  field "lkal-schema" {
+    type = .string
+    required = true
+    one-of = ["0.2"]
+  }
+  field "id" { type = .string }
+  field "version" { type = .string }
+  field "doc" { type = .string }
+  field "root" {
+    type = .record
+    required = true
+    field "doc" { type = .string }
+    field "open" { type = .bool, default = false }
+    field "reserved" {
+      type = .list
+      items { type = .string }
+    }
+    field "field" {
+      type = .map
+      value { use = &def/field-spec }
+    }
+  }
+  field "def" {
+    type = .map
+    value { use = &def/type-spec }
+  }
+}

@@ -1,0 +1,11 @@
+@lkal "0.1"
+
+tags = ["a", "b", "a"]
+
+plugin "auth" {
+  order = 1
+}
+
+plugin "cache" {
+  order = 1
+}

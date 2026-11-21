@@ -1827,3 +1827,173 @@ func TestErrorCatalogL107(t *testing.T) {
 		})
 	}
 }
+
+func TestErrorRenderingWithPath(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *Error
+		want string
+	}{
+		{
+			name: "file_pos_path_hint",
+			err: &Error{
+				File: "app.lkal",
+				Pos:  Pos{Line: 5, Col: 10},
+				Code: "L502",
+				Msg:  "type mismatch",
+				Path: "server/port",
+				Hint: "expected Int, got String",
+			},
+			want: "app.lkal:5:10: L502 type mismatch\n  path: server/port\n  hint: expected Int, got String",
+		},
+		{
+			name: "file_pos_path_no_hint",
+			err: &Error{
+				File: "app.lkal",
+				Pos:  Pos{Line: 5, Col: 10},
+				Code: "L502",
+				Msg:  "type mismatch",
+				Path: "server/port",
+			},
+			want: "app.lkal:5:10: L502 type mismatch\n  path: server/port",
+		},
+		{
+			name: "file_only_path_hint",
+			err: &Error{
+				File: "app.lkal",
+				Code: "L501",
+				Msg:  "missing required field",
+				Path: "server/host",
+				Hint: "add required field \"host\"",
+			},
+			want: "app.lkal: L501 missing required field\n  path: server/host\n  hint: add required field \"host\"",
+		},
+		{
+			name: "pos_only_path_hint",
+			err: &Error{
+				Pos:  Pos{Line: 3, Col: 1},
+				Code: "L503",
+				Msg:  "unknown field",
+				Path: "extra",
+				Hint: "remove unknown field",
+			},
+			want: "3:1: L503 unknown field\n  path: extra\n  hint: remove unknown field",
+		},
+		{
+			name: "no_file_no_pos_path_hint",
+			err: &Error{
+				Code: "L501",
+				Msg:  "missing required field",
+				Path: "a/b/c",
+				Hint: "add field",
+			},
+			want: "L501 missing required field\n  path: a/b/c\n  hint: add field",
+		},
+		{
+			name: "no_file_no_pos_path_no_hint",
+			err: &Error{
+				Code: "L501",
+				Msg:  "missing required field",
+				Path: "a/b/c",
+			},
+			want: "L501 missing required field\n  path: a/b/c",
+		},
+		{
+			name: "empty_path_v01_identical_with_hint",
+			err: &Error{
+				File: "app.lkal",
+				Pos:  Pos{Line: 2, Col: 4},
+				Code: "L102",
+				Msg:  "bare word in value position",
+				Hint: `write "tcp" for a string or .tcp for an enum`,
+				Path: "",
+			},
+			want: "app.lkal:2:4: L102 bare word in value position\n  hint: write \"tcp\" for a string or .tcp for an enum",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.err.Error(); got != tt.want {
+				t.Errorf("Error() mismatch:\ngot:  %q\nwant: %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSortErrorsLocatedAndUnlocated(t *testing.T) {
+	t.Run("LocatedBeforeUnlocatedAndTieBreakers", func(t *testing.T) {
+		input := []*Error{
+			{Pos: Pos{}, Code: "L502", Path: "z/path", Msg: "unlocated z 502"},
+			{Pos: Pos{Line: 4, Col: 2}, Code: "L502", Path: "b/path", Msg: "line 4 col 2 b"},
+			{Pos: Pos{}, Code: "L501", Path: "a/path", Msg: "unlocated a 501"},
+			{Pos: Pos{Line: 2, Col: 5}, Code: "L503", Path: "a/path", Msg: "line 2 col 5"},
+			{Pos: Pos{}, Code: "L503", Path: "a/path", Msg: "unlocated a 503"},
+			{Pos: Pos{Line: 4, Col: 2}, Code: "L502", Path: "a/path", Msg: "line 4 col 2 a"},
+			{Pos: Pos{Line: 4, Col: 2}, Code: "L501", Path: "z/path", Msg: "line 4 col 2 code 501"},
+			{Pos: Pos{Line: 2, Col: 1}, Code: "L501", Path: "x/path", Msg: "line 2 col 1"},
+		}
+
+		sorted := sortErrors(input)
+		want := []struct {
+			pos  Pos
+			code string
+			path string
+		}{
+			{Pos{Line: 2, Col: 1}, "L501", "x/path"},
+			{Pos{Line: 2, Col: 5}, "L503", "a/path"},
+			{Pos{Line: 4, Col: 2}, "L501", "z/path"},
+			{Pos{Line: 4, Col: 2}, "L502", "a/path"},
+			{Pos{Line: 4, Col: 2}, "L502", "b/path"},
+			{Pos{}, "L501", "a/path"},
+			{Pos{}, "L503", "a/path"},
+			{Pos{}, "L502", "z/path"},
+		}
+
+		if len(sorted) != len(want) {
+			t.Fatalf("len(sorted) = %d, want %d", len(sorted), len(want))
+		}
+		for i, w := range want {
+			got := sorted[i]
+			if got.Pos != w.pos || got.Code != w.code || got.Path != w.path {
+				t.Errorf("sorted[%d] = (%v, %s, %q), want (%v, %s, %q)",
+					i, got.Pos, got.Code, got.Path, w.pos, w.code, w.path)
+			}
+		}
+	})
+
+	t.Run("TruncatesAt20WithMixedLocatedAndUnlocated", func(t *testing.T) {
+		var errs []*Error
+		for i := 15; i >= 1; i-- {
+			errs = append(errs, &Error{
+				Pos:  Pos{},
+				Code: "L501",
+				Path: "p" + strconv.Itoa(i),
+			})
+		}
+		for i := 15; i >= 1; i-- {
+			errs = append(errs, &Error{
+				Pos:  Pos{Line: i, Col: 1},
+				Code: "L502",
+				Path: "loc" + strconv.Itoa(i),
+			})
+		}
+
+		sorted := sortErrors(errs)
+		if len(sorted) != 20 {
+			t.Fatalf("len(sorted) = %d, want 20", len(sorted))
+		}
+		for i := 0; i < 15; i++ {
+			if sorted[i].Pos.Line != i+1 {
+				t.Errorf("sorted[%d].Pos.Line = %d, want %d", i, sorted[i].Pos.Line, i+1)
+			}
+		}
+		wantUnlocatedPaths := []string{"p1", "p10", "p11", "p12", "p13"}
+		for i, wp := range wantUnlocatedPaths {
+			got := sorted[15+i]
+			if got.Pos != (Pos{}) || got.Path != wp {
+				t.Errorf("sorted[%d] = (Pos=%v, Path=%q), want (Pos=0:0, Path=%q)", 15+i, got.Pos, got.Path, wp)
+			}
+		}
+	})
+}

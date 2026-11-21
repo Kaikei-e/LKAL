@@ -1,0 +1,16 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "member" {
+    type = .map
+    key { min-length = 2, max-length = 4, pattern = "[a-z0-9]+" }
+    value { type = .string }
+  }
+  field "region" {
+    type = .map
+    key { one-of = ["us", "eu", "jp"] }
+    value { type = .int }
+  }
+}

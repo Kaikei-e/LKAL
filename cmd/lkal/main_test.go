@@ -1417,3 +1417,544 @@ func TestStdinStreaming(t *testing.T) {
 		}
 	})
 }
+
+const (
+	testAppSchema = `@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "service" {
+    type = .map
+    value {
+      type = .record
+      field "replicas" { type = .int, min = 1, max = 10, required = true }
+      field "image" { type = .string }
+    }
+  }
+}
+`
+	testValidAppDoc = `@lkal "0.1"
+
+### web service
+service "web" {
+  replicas = 3
+  image = "ghcr.io/acme/web:1.0"
+}
+`
+	testBadTypeAppDoc = `@lkal "0.1"
+
+service "web" {
+  replicas = "three"
+}
+`
+	testBadSyntaxAppDoc = `@lkal "0.1"
+
+extra = 1
+service "web" {
+  replicas = bareword
+}
+`
+	testBadSchemaUnresolved = `@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "x" { use = &def/missing }
+}
+`
+	testBadSchemaSyntax = `@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "x" { type = int }
+}
+`
+)
+
+func TestSchemaUsageErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"schema no subcommand", []string{"schema"}},
+		{"schema unknown subcommand", []string{"schema", "nope"}},
+		{"schema flag before check", []string{"schema", "--json", "check", "f"}},
+		{"schema check no file", []string{"schema", "check"}},
+		{"schema check unknown flag", []string{"schema", "check", "--nope", "f"}},
+		{"check --schema missing arg", []string{"check", "--schema"}},
+		{"check --schema missing file", []string{"check", "--schema", "s.lkal"}},
+		{"set --schema missing arg", []string{"set", "--schema"}},
+		{"set --schema missing value", []string{"set", "--schema", "s.lkal", "f", "p"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := execRun(t, tc.args)
+			if code != 2 || stdout != "" || !hasUsageLine(stderr) {
+				t.Errorf("run(%v):\nexit code: got %d, want 2\nstdout: got %q, want \"\"\nstderr: got %q, want a line starting with \"usage: lkal\"",
+					tc.args, code, stdout, stderr)
+			}
+		})
+	}
+}
+
+func TestSchemaIOErrors(t *testing.T) {
+	dir := t.TempDir()
+	validDoc := writeTemp(t, dir, "app.lkal", testValidAppDoc)
+	validSchema := writeTemp(t, dir, "app.schema.lkal", testAppSchema)
+	badTypeDoc := writeTemp(t, dir, "bad_type.lkal", testBadTypeAppDoc)
+	badSchema := writeTemp(t, dir, "bad.schema.lkal", testBadSchemaUnresolved)
+	missingSchema := filepath.Join(dir, "missing.schema.lkal")
+	missingDoc := filepath.Join(dir, "missing.lkal")
+
+	tests := []struct {
+		name           string
+		args           []string
+		wantExact      string
+		wantUnmodified string
+	}{
+		{
+			name: "check missing schema",
+			args: []string{"check", "--schema", missingSchema, validDoc},
+		},
+		{
+			name: "check missing schema with --json",
+			args: []string{"check", "--schema", missingSchema, "--json", validDoc},
+		},
+		{
+			name:      "check empty --schema",
+			args:      []string{"check", "--schema", "", validDoc},
+			wantExact: "lkal: empty schema path\n",
+		},
+		{
+			name:      "check empty -schema",
+			args:      []string{"check", "-schema", "", validDoc},
+			wantExact: "lkal: empty schema path\n",
+		},
+		{
+			name:           "set missing schema",
+			args:           []string{"set", "--schema", missingSchema, validDoc, "service/web/replicas", "5"},
+			wantUnmodified: validDoc,
+		},
+		{
+			name:           "set empty --schema",
+			args:           []string{"set", "--schema", "", validDoc, "service/web/replicas", "5"},
+			wantExact:      "lkal: empty schema path\n",
+			wantUnmodified: validDoc,
+		},
+		{
+			name:           "set empty -schema",
+			args:           []string{"set", "-schema", "", validDoc, "service/web/replicas", "5"},
+			wantExact:      "lkal: empty schema path\n",
+			wantUnmodified: validDoc,
+		},
+		{
+			name: "schema check missing file",
+			args: []string{"schema", "check", missingSchema},
+		},
+		{
+			name: "schema check --json missing file",
+			args: []string{"schema", "check", "--json", missingSchema},
+		},
+		{
+			name: "schema check empty path",
+			args: []string{"schema", "check", ""},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := execRun(t, tc.args)
+			if code != 2 || stdout != "" || !strings.HasPrefix(stderr, "lkal: ") {
+				t.Errorf("run(%v):\nexit code: got %d, want 2\nstdout: got %q, want \"\"\nstderr: got %q, want prefix \"lkal: \"",
+					tc.args, code, stdout, stderr)
+			}
+			if tc.wantExact != "" && stderr != tc.wantExact {
+				t.Errorf("run(%v) stderr:\ngot  %q\nwant %q", tc.args, stderr, tc.wantExact)
+			}
+			if tc.wantUnmodified != "" {
+				data, err := os.ReadFile(tc.wantUnmodified)
+				if err != nil || string(data) != testValidAppDoc {
+					t.Errorf("file %q was modified on error", tc.wantUnmodified)
+				}
+			}
+		})
+	}
+
+	t.Run("schema check partial IO and compile error", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"schema", "check", badSchema, missingSchema})
+		if code != 2 || stdout != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want code=2 stdout=\"\"", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "lkal: ") || !strings.Contains(stderr, "L602") {
+			t.Errorf("expected both IO error and L602 diagnostic, got %q", stderr)
+		}
+	})
+
+	t.Run("check --schema partial IO and validation error", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"check", "--schema", validSchema, missingDoc, badTypeDoc})
+		if code != 2 || stdout != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want code=2 stdout=\"\"", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "lkal: ") || !strings.Contains(stderr, "L501") {
+			t.Errorf("expected both IO error and L501 diagnostic, got %q", stderr)
+		}
+	})
+}
+
+func TestSchemaCheck(t *testing.T) {
+	dir := t.TempDir()
+	valid1 := writeTemp(t, dir, "valid1.schema.lkal", testAppSchema)
+	valid2 := writeTemp(t, dir, "valid2.schema.lkal", "@lkal \"0.1\"\n\nlkal-schema = \"0.2\"\n\nroot {\n  field \"name\" { type = .string }\n}\n")
+	badUnresolved := writeTemp(t, dir, "unresolved.schema.lkal", testBadSchemaUnresolved)
+	badSyntax := writeTemp(t, dir, "syntax.schema.lkal", testBadSchemaSyntax)
+
+	t.Run("valid schema file", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"schema", "check", valid1})
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want 0/\"\"/\"\"", code, stdout, stderr)
+		}
+	})
+
+	t.Run("valid schema file with --json", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"schema", "check", "--json", valid1})
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want 0/\"\"/\"\"", code, stdout, stderr)
+		}
+	})
+
+	t.Run("multiple valid schemas", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"schema", "check", valid1, valid2})
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want 0/\"\"/\"\"", code, stdout, stderr)
+		}
+	})
+
+	t.Run("valid schema via stdin", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"schema", "check", "-"}, testAppSchema)
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want 0/\"\"/\"\"", code, stdout, stderr)
+		}
+	})
+
+	t.Run("invalid schema L602 text", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"schema", "check", badUnresolved})
+		if code != 1 || stdout != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want code=1 stdout=\"\"", code, stdout, stderr)
+		}
+		if !strings.HasPrefix(stderr, badUnresolved+":6:") ||
+			!strings.Contains(stderr, "L602 unresolved definition") ||
+			!strings.Contains(stderr, "\n  path: root/field/x/use\n") {
+			t.Errorf("unexpected stderr:\n%s", stderr)
+		}
+	})
+
+	t.Run("invalid schema L602 --json includes path after hint", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"schema", "check", "--json", badUnresolved})
+		if code != 1 || stdout != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want code=1 stdout=\"\"", code, stdout, stderr)
+		}
+		var raw []map[string]any
+		if err := json.Unmarshal([]byte(stderr), &raw); err != nil {
+			t.Fatalf("invalid JSON: %v\nstderr=%q", err, stderr)
+		}
+		if len(raw) != 1 {
+			t.Fatalf("len(raw)=%d, want 1; stderr=%q", len(raw), stderr)
+		}
+		if raw[0]["file"] != badUnresolved || raw[0]["code"] != "L602" || raw[0]["path"] != "root/field/x/use" {
+			t.Errorf("unexpected JSON entry: %#v", raw[0])
+		}
+		hintIdx := strings.Index(stderr, `"hint":`)
+		pathIdx := strings.Index(stderr, `"path":`)
+		if hintIdx == -1 || pathIdx == -1 || pathIdx < hintIdx {
+			t.Errorf("expected \"path\" after \"hint\" in JSON, got %q", stderr)
+		}
+	})
+
+	t.Run("invalid schema L602 via stdin", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"schema", "check", "-"}, testBadSchemaUnresolved)
+		if code != 1 || stdout != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want code=1 stdout=\"\"", code, stdout, stderr)
+		}
+		if !strings.HasPrefix(stderr, "-:6:") || !strings.Contains(stderr, "L602") || !strings.Contains(stderr, "  path: root/field/x/use\n") {
+			t.Errorf("unexpected stderr:\n%s", stderr)
+		}
+	})
+
+	t.Run("invalid schema L102 syntax text and --json omits path", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"schema", "check", badSyntax})
+		wantText := badSyntax + ":6:22: L102 bare word in value position\n  hint: write \"int\" for a string or .int for an enum\n"
+		if code != 1 || stdout != "" || stderr != wantText {
+			t.Errorf("text:\ncode=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantText)
+		}
+
+		code, stdout, stderr = execRun(t, []string{"schema", "check", "--json", badSyntax})
+		wantJSON := fmt.Sprintf(`[{"file":%q,"line":6,"col":22,"code":"L102","message":"bare word in value position","hint":"write \"int\" for a string or .int for an enum"}]`+"\n", badSyntax)
+		if code != 1 || stdout != "" || stderr != wantJSON {
+			t.Errorf("json:\ncode=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantJSON)
+		}
+	})
+
+	t.Run("multiple schemas mixed valid and invalid --json", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"schema", "check", "--json", valid1, badSyntax, badUnresolved})
+		if code != 1 || stdout != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want code=1 stdout=\"\"", code, stdout, stderr)
+		}
+		var raw []map[string]any
+		if err := json.Unmarshal([]byte(stderr), &raw); err != nil {
+			t.Fatalf("invalid JSON: %v\nstderr=%q", err, stderr)
+		}
+		if len(raw) != 2 {
+			t.Fatalf("len(raw)=%d, want 2; stderr=%q", len(raw), stderr)
+		}
+		if _, hasPath := raw[0]["path"]; hasPath || raw[0]["code"] != "L102" {
+			t.Errorf("entry 0 should be L102 without path, got %#v", raw[0])
+		}
+		if raw[1]["code"] != "L602" || raw[1]["path"] != "root/field/x/use" {
+			t.Errorf("entry 1 should be L602 with path, got %#v", raw[1])
+		}
+	})
+}
+
+func TestCheckWithSchema(t *testing.T) {
+	dir := t.TempDir()
+	schemaFile := writeTemp(t, dir, "app.schema.lkal", testAppSchema)
+	badSchemaFile := writeTemp(t, dir, "bad.schema.lkal", testBadSchemaUnresolved)
+	valid1 := writeTemp(t, dir, "valid1.lkal", testValidAppDoc)
+	valid2 := writeTemp(t, dir, "valid2.lkal", "@lkal \"0.1\"\n\nservice \"api\" {\n  replicas = 1\n}\n")
+	badType := writeTemp(t, dir, "bad_type.lkal", testBadTypeAppDoc)
+	badSyntax := writeTemp(t, dir, "bad_syntax.lkal", testBadSyntaxAppDoc)
+
+	t.Run("valid files with --schema and -schema", func(t *testing.T) {
+		for _, flagName := range []string{"--schema", "-schema"} {
+			code, stdout, stderr := execRun(t, []string{"check", flagName, schemaFile, valid1, valid2})
+			if code != 0 || stdout != "" || stderr != "" {
+				t.Errorf("%s: got code=%d stdout=%q stderr=%q, want 0/\"\"/\"\"", flagName, code, stdout, stderr)
+			}
+		}
+	})
+
+	t.Run("valid stdin with --schema", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"check", "--schema", schemaFile, "-"}, testValidAppDoc)
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want 0/\"\"/\"\"", code, stdout, stderr)
+		}
+	})
+
+	t.Run("invalid stdin with --schema reports L501 with path", func(t *testing.T) {
+		code, stdout, stderr := execRunWithStdin(t, []string{"check", "--schema", schemaFile, "-"}, testBadTypeAppDoc)
+		wantStderr := "-:4:14: L501 type mismatch\n  path: service/web/replicas\n  hint: expected int, got string\n"
+		if code != 1 || stdout != "" || stderr != wantStderr {
+			t.Errorf("got code=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantStderr)
+		}
+	})
+
+	t.Run("L501 violation in text and --json", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"check", "--schema", schemaFile, badType})
+		wantText := badType + ":4:14: L501 type mismatch\n  path: service/web/replicas\n  hint: expected int, got string\n"
+		if code != 1 || stdout != "" || stderr != wantText {
+			t.Errorf("text:\ncode=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantText)
+		}
+
+		code, stdout, stderr = execRun(t, []string{"check", "--schema", schemaFile, "--json", badType})
+		wantJSON := fmt.Sprintf(`[{"file":%q,"line":4,"col":14,"code":"L501","message":"type mismatch","hint":"expected int, got string","path":"service/web/replicas"}]`+"\n", badType)
+		if code != 1 || stdout != "" || stderr != wantJSON {
+			t.Errorf("json:\ncode=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantJSON)
+		}
+	})
+
+	t.Run("invalid schema L602 exits 1 in text and --json", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"check", "--schema", badSchemaFile, badType})
+		if code != 1 || stdout != "" || !strings.Contains(stderr, "L602") || strings.Contains(stderr, "L501") {
+			t.Errorf("text: got code=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+
+		code, stdout, stderr = execRun(t, []string{"check", "--schema", badSchemaFile, "--json", badType})
+		if code != 1 || stdout != "" {
+			t.Errorf("json: got code=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		var raw []map[string]any
+		if err := json.Unmarshal([]byte(stderr), &raw); err != nil {
+			t.Fatalf("invalid JSON: %v\nstderr=%q", err, stderr)
+		}
+		if len(raw) != 1 || raw[0]["file"] != badSchemaFile || raw[0]["code"] != "L602" || raw[0]["path"] != "root/field/x/use" {
+			t.Errorf("unexpected JSON entries: %#v", raw)
+		}
+	})
+
+	t.Run("multi-file mix skips Validate on L102 file and validates L501 file", func(t *testing.T) {
+		code, stdout, stderr := execRun(t, []string{"check", "--schema", schemaFile, "--json", badSyntax, badType})
+		if code != 1 || stdout != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want code=1 stdout=\"\"", code, stdout, stderr)
+		}
+		var raw []map[string]any
+		if err := json.Unmarshal([]byte(stderr), &raw); err != nil {
+			t.Fatalf("invalid JSON: %v\nstderr=%q", err, stderr)
+		}
+		if len(raw) != 2 {
+			t.Fatalf("expected exactly 2 errors (Validate skipped for bad_syntax), got %d: %s", len(raw), stderr)
+		}
+		if raw[0]["file"] != badSyntax || raw[0]["code"] != "L102" {
+			t.Errorf("entry 0 mismatch: %#v", raw[0])
+		}
+		if _, hasPath := raw[0]["path"]; hasPath {
+			t.Errorf("entry 0 (L102) must omit path key, got %#v", raw[0])
+		}
+		if raw[1]["file"] != badType || raw[1]["code"] != "L501" || raw[1]["path"] != "service/web/replicas" {
+			t.Errorf("entry 1 mismatch: %#v", raw[1])
+		}
+	})
+}
+
+func TestSetWithSchema(t *testing.T) {
+	t.Run("valid mutation updates file and keeps comments", func(t *testing.T) {
+		dir := t.TempDir()
+		schemaFile := writeTemp(t, dir, "app.schema.lkal", testAppSchema)
+		docFile := writeTemp(t, dir, "app.lkal", testValidAppDoc)
+
+		code, stdout, stderr := execRun(t, []string{"set", "--schema", schemaFile, docFile, "service/web/replicas", "5"})
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want 0/\"\"/\"\"", code, stdout, stderr)
+		}
+		data, err := os.ReadFile(docFile)
+		if err != nil {
+			t.Fatalf("read file: %v", err)
+		}
+		want := strings.Replace(testValidAppDoc, "replicas = 3", "replicas = 5", 1)
+		if string(data) != want {
+			t.Errorf("file content mismatch:\ngot:\n%s\nwant:\n%s", string(data), want)
+		}
+	})
+
+	t.Run("valid mutation with -schema on stdin writes stdout", func(t *testing.T) {
+		dir := t.TempDir()
+		schemaFile := writeTemp(t, dir, "app.schema.lkal", testAppSchema)
+
+		code, stdout, stderr := execRunWithStdin(t, []string{"set", "-schema", schemaFile, "-", "service/web/replicas", "7"}, testValidAppDoc)
+		want := strings.Replace(testValidAppDoc, "replicas = 3", "replicas = 7", 1)
+		if code != 0 || stdout != want || stderr != "" {
+			t.Errorf("got code=%d stderr=%q\nstdout:\n%s\nwant:\n%s", code, stderr, stdout, want)
+		}
+	})
+
+	invalidMutations := []struct {
+		name     string
+		path     string
+		value    string
+		wantCode string
+		wantPath string
+		wantHint string
+	}{
+		{
+			name:     "L501 type mismatch",
+			path:     "service/web/replicas",
+			value:    `"three"`,
+			wantCode: "L501",
+			wantPath: "service/web/replicas",
+			wantHint: "expected int, got string",
+		},
+		{
+			name:     "L504 value out of range",
+			path:     "service/web/replicas",
+			value:    "99",
+			wantCode: "L504",
+			wantPath: "service/web/replicas",
+			wantHint: "must be <= 10",
+		},
+		{
+			name:     "L503 unknown field",
+			path:     "service/web/unknown",
+			value:    `"x"`,
+			wantCode: "L503",
+			wantPath: "service/web/unknown",
+			wantHint: "allowed fields: replicas, image",
+		},
+	}
+
+	for _, tc := range invalidMutations {
+		t.Run(tc.name+" text leaves file untouched", func(t *testing.T) {
+			dir := t.TempDir()
+			schemaFile := writeTemp(t, dir, "app.schema.lkal", testAppSchema)
+			docFile := writeTemp(t, dir, "app.lkal", testValidAppDoc)
+
+			code, stdout, stderr := execRun(t, []string{"set", "--schema", schemaFile, docFile, tc.path, tc.value})
+			if code != 1 || stdout != "" {
+				t.Errorf("got code=%d stdout=%q stderr=%q, want code=1 stdout=\"\"", code, stdout, stderr)
+			}
+			if !strings.Contains(stderr, docFile+":") ||
+				!strings.Contains(stderr, tc.wantCode) ||
+				!strings.Contains(stderr, "  path: "+tc.wantPath+"\n") ||
+				!strings.Contains(stderr, "  hint: "+tc.wantHint+"\n") {
+				t.Errorf("unexpected stderr:\n%s", stderr)
+			}
+			data, err := os.ReadFile(docFile)
+			if err != nil || string(data) != testValidAppDoc {
+				t.Errorf("file was modified on validation failure:\ngot:\n%s\nwant:\n%s", string(data), testValidAppDoc)
+			}
+		})
+
+		t.Run(tc.name+" --json leaves file untouched", func(t *testing.T) {
+			dir := t.TempDir()
+			schemaFile := writeTemp(t, dir, "app.schema.lkal", testAppSchema)
+			docFile := writeTemp(t, dir, "app.lkal", testValidAppDoc)
+
+			code, stdout, stderr := execRun(t, []string{"set", "--schema", schemaFile, "--json", docFile, tc.path, tc.value})
+			if code != 1 || stdout != "" {
+				t.Errorf("got code=%d stdout=%q stderr=%q, want code=1 stdout=\"\"", code, stdout, stderr)
+			}
+			var raw []map[string]any
+			if err := json.Unmarshal([]byte(stderr), &raw); err != nil {
+				t.Fatalf("invalid JSON: %v\nstderr=%q", err, stderr)
+			}
+			if len(raw) != 1 || raw[0]["file"] != docFile || raw[0]["code"] != tc.wantCode || raw[0]["path"] != tc.wantPath || raw[0]["hint"] != tc.wantHint {
+				t.Errorf("unexpected JSON entry: %#v", raw)
+			}
+			hintIdx := strings.Index(stderr, `"hint":`)
+			pathIdx := strings.Index(stderr, `"path":`)
+			if hintIdx == -1 || pathIdx == -1 || pathIdx < hintIdx {
+				t.Errorf("expected \"path\" after \"hint\" in JSON, got %q", stderr)
+			}
+			data, err := os.ReadFile(docFile)
+			if err != nil || string(data) != testValidAppDoc {
+				t.Errorf("file was modified on validation failure")
+			}
+		})
+	}
+
+	t.Run("invalid mutation on stdin writes nothing to stdout", func(t *testing.T) {
+		dir := t.TempDir()
+		schemaFile := writeTemp(t, dir, "app.schema.lkal", testAppSchema)
+
+		code, stdout, stderr := execRunWithStdin(t, []string{"set", "--schema", schemaFile, "-", "service/web/replicas", `"three"`}, testValidAppDoc)
+		wantText := "-: L501 type mismatch\n  path: service/web/replicas\n  hint: expected int, got string\n"
+		if code != 1 || stdout != "" || stderr != wantText {
+			t.Errorf("text:\ncode=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantText)
+		}
+
+		code, stdout, stderr = execRunWithStdin(t, []string{"set", "--schema", schemaFile, "--json", "-", "service/web/replicas", `"three"`}, testValidAppDoc)
+		wantJSON := `[{"file":"-","line":0,"col":0,"code":"L501","message":"type mismatch","hint":"expected int, got string","path":"service/web/replicas"}]` + "\n"
+		if code != 1 || stdout != "" || stderr != wantJSON {
+			t.Errorf("json:\ncode=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantJSON)
+		}
+	})
+
+	t.Run("invalid schema compiles first before parsing value or reading file", func(t *testing.T) {
+		dir := t.TempDir()
+		badSchemaFile := writeTemp(t, dir, "bad.schema.lkal", testBadSchemaUnresolved)
+		missingDoc := filepath.Join(dir, "missing.lkal")
+
+		code, stdout, stderr := execRun(t, []string{"set", "--schema", badSchemaFile, "--json", missingDoc, "service/web/replicas", "bareword"})
+		if code != 1 || stdout != "" {
+			t.Errorf("got code=%d stdout=%q stderr=%q, want code=1 stdout=\"\"", code, stdout, stderr)
+		}
+		var raw []map[string]any
+		if err := json.Unmarshal([]byte(stderr), &raw); err != nil {
+			t.Fatalf("invalid JSON: %v\nstderr=%q", err, stderr)
+		}
+		if len(raw) != 1 || raw[0]["file"] != badSchemaFile || raw[0]["code"] != "L602" || raw[0]["path"] != "root/field/x/use" {
+			t.Errorf("expected L602 schema compile error first, got %#v", raw)
+		}
+	})
+}

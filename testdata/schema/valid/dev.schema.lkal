@@ -1,0 +1,33 @@
+@lkal "0.1"
+
+### Schema for Nayutar config/dev.lkal
+lkal-schema = "0.2"
+id = "nayutar/config/dev"
+version = "1.0.0"
+
+root {
+  field "etcd" {
+    required = true
+    type = .record
+    doc = "Single etcd cluster that holds every tenant's data"
+
+    field "version" { required = true, type = .string, pattern = "[0-9]+\\.[0-9]+\\.[0-9]+" }
+    field "member" {
+      required = true
+      type = .map
+      min-entries = 3
+      max-entries = 3
+      key { pattern = "[A-Za-z0-9_-]+" }
+      value { use = &def/etcd-member }
+    }
+  }
+}
+
+def "etcd-member" {
+  type = .record
+  field "client-url" { required = true, use = &def/loopback-url }
+  field "peer-url" { required = true, use = &def/loopback-url }
+}
+
+### Shape only; loopback semantics stay in cmd/dev-etcd
+def "loopback-url" { type = .string, pattern = "http://[0-9.:\\[\\]]+:[0-9]{1,5}/?" }

@@ -1,0 +1,17 @@
+@lkal "0.1"
+
+tree {
+  label = "root"
+  fallback {
+    label = "default"
+  }
+  children "left" {
+    label = "branch-a"
+    children "leaf" {
+      label = "leaf-1"
+    }
+  }
+  children "right" {
+    label = "branch-b"
+  }
+}

@@ -10,6 +10,7 @@ import (
 	"os"
 
 	lkal "github.com/Kaikei-e/LKAL"
+	"github.com/Kaikei-e/LKAL/schema"
 )
 
 const usageText = "usage: lkal <command> [flags] [args...]"
@@ -35,6 +36,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return cmdSet(args[1:], stdin, stdout, stderr)
 		case "del":
 			return cmdDel(args[1:], stdin, stdout, stderr)
+		case "schema":
+			return cmdSchema(args[1:], stdin, stderr)
 		}
 	}
 	fmt.Fprintln(stderr, usageText)
@@ -48,6 +51,7 @@ type jsonErrorEntry struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Hint    string `json:"hint"`
+	Path    string `json:"path,omitempty"`
 }
 
 func reportErrors(errs []*lkal.Error, jsonOutput bool, stderr io.Writer) {
@@ -64,6 +68,7 @@ func reportErrors(errs []*lkal.Error, jsonOutput bool, stderr io.Writer) {
 				Code:    e.Code,
 				Message: e.Msg,
 				Hint:    e.Hint,
+				Path:    e.Path,
 			}
 		}
 		json.MarshalWrite(stderr, entries, jsontext.AllowInvalidUTF8(true))
@@ -77,6 +82,34 @@ func reportErrors(errs []*lkal.Error, jsonOutput bool, stderr io.Writer) {
 
 func toErrors(err error) []*lkal.Error {
 	return err.(*lkal.ErrorList).Errors
+}
+
+func flagVisited(fs *flag.FlagSet, name string) bool {
+	visited := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			visited = true
+		}
+	})
+	return visited
+}
+
+func loadSchema(schemaPath string, jsonOut bool, stderr io.Writer) (*schema.Schema, int) {
+	if schemaPath == "" {
+		fmt.Fprintln(stderr, "lkal: empty schema path")
+		return nil, 2
+	}
+	schemaSrc, err := os.ReadFile(schemaPath)
+	if err != nil {
+		fmt.Fprintln(stderr, "lkal:", err)
+		return nil, 2
+	}
+	s, err := schema.Compile(schemaPath, schemaSrc)
+	if err != nil {
+		reportErrors(toErrors(err), jsonOut, stderr)
+		return nil, 1
+	}
+	return s, 0
 }
 
 func parseFlags(name, usage string, args []string, stderr io.Writer, minArgs, maxArgs int, extra func(*flag.FlagSet)) (bool, []string, bool) {
@@ -120,9 +153,24 @@ func readAndParse(file string, stdin io.Reader, jsonOut bool, stderr io.Writer) 
 }
 
 func cmdCheck(args []string, stdin io.Reader, stderr io.Writer) int {
-	jsonOut, files, ok := parseFlags("check", "check [--json] FILE...", args, stderr, 1, -1, nil)
+	var (
+		schemaPath string
+		parsedFS   *flag.FlagSet
+	)
+	jsonOut, files, ok := parseFlags("check", "check [--schema S] [--json] FILE...", args, stderr, 1, -1, func(fs *flag.FlagSet) {
+		fs.StringVar(&schemaPath, "schema", "", "")
+		parsedFS = fs
+	})
 	if !ok {
 		return 2
+	}
+	var s *schema.Schema
+	if flagVisited(parsedFS, "schema") {
+		var code int
+		s, code = loadSchema(schemaPath, jsonOut, stderr)
+		if code != 0 {
+			return code
+		}
 	}
 	var (
 		allErrors []*lkal.Error
@@ -135,8 +183,15 @@ func cmdCheck(args []string, stdin io.Reader, stderr io.Writer) int {
 			hasIO = true
 			continue
 		}
-		if _, parseErr := lkal.Parse(file, src); parseErr != nil {
+		f, parseErr := lkal.Parse(file, src)
+		if parseErr != nil {
 			allErrors = append(allErrors, toErrors(parseErr)...)
+			continue
+		}
+		if s != nil {
+			if valErr := s.Validate(f); valErr != nil {
+				allErrors = append(allErrors, toErrors(valErr)...)
+			}
 		}
 	}
 	reportErrors(allErrors, jsonOut, stderr)
@@ -288,9 +343,24 @@ func cmdGet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func cmdSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	jsonOut, pos, ok := parseFlags("set", "set [--json] FILE PATH VALUE", args, stderr, 3, 3, nil)
+	var (
+		schemaPath string
+		parsedFS   *flag.FlagSet
+	)
+	jsonOut, pos, ok := parseFlags("set", "set [--schema S] [--json] FILE PATH VALUE", args, stderr, 3, 3, func(fs *flag.FlagSet) {
+		fs.StringVar(&schemaPath, "schema", "", "")
+		parsedFS = fs
+	})
 	if !ok {
 		return 2
+	}
+	var s *schema.Schema
+	if flagVisited(parsedFS, "schema") {
+		var code int
+		s, code = loadSchema(schemaPath, jsonOut, stderr)
+		if code != 0 {
+			return code
+		}
 	}
 	val, err := lkal.ParseValue([]byte(pos[2]))
 	if err != nil {
@@ -308,6 +378,12 @@ func cmdSet(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err := f.Set(pos[1], val); err != nil {
 		reportErrors(toErrors(err), jsonOut, stderr)
 		return 1
+	}
+	if s != nil {
+		if valErr := s.Validate(f); valErr != nil {
+			reportErrors(toErrors(valErr), jsonOut, stderr)
+			return 1
+		}
 	}
 	if pos[0] == "-" {
 		stdout.Write(f.Format())
@@ -340,6 +416,44 @@ func cmdDel(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err := os.WriteFile(pos[0], f.Format(), 0666); err != nil {
 		fmt.Fprintln(stderr, "lkal:", err)
 		return 2
+	}
+	return 0
+}
+
+func cmdSchema(args []string, stdin io.Reader, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "check" {
+		fmt.Fprintln(stderr, "usage: lkal schema check [--json] FILE...")
+		return 2
+	}
+	return cmdSchemaCheck(args[1:], stdin, stderr)
+}
+
+func cmdSchemaCheck(args []string, stdin io.Reader, stderr io.Writer) int {
+	jsonOut, files, ok := parseFlags("schema check", "schema check [--json] FILE...", args, stderr, 1, -1, nil)
+	if !ok {
+		return 2
+	}
+	var (
+		allErrors []*lkal.Error
+		hasIO     bool
+	)
+	for _, file := range files {
+		src, err := readInput(file, stdin)
+		if err != nil {
+			fmt.Fprintln(stderr, "lkal:", err)
+			hasIO = true
+			continue
+		}
+		if _, compErr := schema.Compile(file, src); compErr != nil {
+			allErrors = append(allErrors, toErrors(compErr)...)
+		}
+	}
+	reportErrors(allErrors, jsonOut, stderr)
+	if hasIO {
+		return 2
+	}
+	if len(allErrors) > 0 {
+		return 1
 	}
 	return 0
 }

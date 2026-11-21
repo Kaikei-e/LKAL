@@ -1,0 +1,10 @@
+@lkal "0.1"
+
+replicas = 0
+ratio = 1.5
+name = "あいうえおか"
+target = &onlyone
+tags = ["a"]
+members {
+  m0 = "one"
+}

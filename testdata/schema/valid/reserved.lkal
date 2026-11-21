@@ -1,0 +1,11 @@
+@lkal "0.1"
+
+port "http" {
+  number = 8080
+  protocol = .tcp
+}
+
+port "dns" {
+  number = 53
+  protocol = .udp
+}

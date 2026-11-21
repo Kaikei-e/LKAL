@@ -1,0 +1,34 @@
+@lkal "0.1"
+
+meta {
+  group = "apps.nayutar.io"
+  kind = "workload"
+  name = "payments-api"
+  labels {
+    app = "payments"
+    tier = "backend"
+  }
+  uid = "550e8400-e29b-41d4-a716-446655440000"
+  revision = 12
+  generation = 3
+}
+
+spec {
+  replicas = 3
+  image = "registry.example/payments:1.4.0"
+  ports = [8080, 9090]
+}
+
+status {
+  observedGeneration = 3
+  condition "Ready" {
+    state = .true
+    reason = "AllReplicasAvailable"
+    since = "2026-11-21T00:00:00Z"
+  }
+  condition "Synced" {
+    state = .true
+    reason = "ReconcileSucceeded"
+    since = "2026-11-21T00:00:00Z"
+  }
+}

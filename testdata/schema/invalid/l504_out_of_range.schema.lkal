@@ -1,0 +1,20 @@
+@lkal "0.1"
+
+lkal-schema = "0.2"
+
+root {
+  field "replicas" { type = .int, min = 1, max = 10 }
+  field "ratio" { type = .decimal, min = 0.0, max = 1.0 }
+  field "name" { type = .string, min-length = 3, max-length = 5 }
+  field "target" { type = .ref, min-segments = 2, max-segments = 3 }
+  field "tags" {
+    type = .list
+    min-items = 2
+    items { type = .string }
+  }
+  field "members" {
+    type = .map
+    min-entries = 2
+    value { type = .string }
+  }
+}

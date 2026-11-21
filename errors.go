@@ -21,6 +21,7 @@ type Error struct {
 	Code string
 	Msg  string
 	Hint string
+	Path string
 }
 
 func (e *Error) Error() string {
@@ -35,6 +36,9 @@ func (e *Error) Error() string {
 		s += " "
 	}
 	s += e.Code + " " + e.Msg
+	if e.Path != "" {
+		s += "\n  path: " + e.Path
+	}
 	if e.Hint != "" {
 		s += "\n  hint: " + e.Hint
 	}
@@ -133,11 +137,24 @@ func newError(file string, pos Pos, code, hint string) *Error {
 
 func sortErrors(errs []*Error) []*Error {
 	sort.SliceStable(errs, func(i, j int) bool {
-		if errs[i].Pos.Line != errs[j].Pos.Line {
-			return errs[i].Pos.Line < errs[j].Pos.Line
+		li, lj := errs[i].Pos.Line > 0, errs[j].Pos.Line > 0
+		if li != lj {
+			return li
 		}
-		if errs[i].Pos.Col != errs[j].Pos.Col {
-			return errs[i].Pos.Col < errs[j].Pos.Col
+		if li {
+			if errs[i].Pos.Line != errs[j].Pos.Line {
+				return errs[i].Pos.Line < errs[j].Pos.Line
+			}
+			if errs[i].Pos.Col != errs[j].Pos.Col {
+				return errs[i].Pos.Col < errs[j].Pos.Col
+			}
+			if errs[i].Code != errs[j].Code {
+				return errs[i].Code < errs[j].Code
+			}
+			return errs[i].Path < errs[j].Path
+		}
+		if errs[i].Path != errs[j].Path {
+			return errs[i].Path < errs[j].Path
 		}
 		return errs[i].Code < errs[j].Code
 	})
