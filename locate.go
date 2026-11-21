@@ -16,6 +16,7 @@ type locNode struct {
 	children map[string]*locNode
 }
 
+// Name returns the file name passed to Parse. A nil File yields "".
 func (f *File) Name() string {
 	if f == nil {
 		return ""
@@ -23,6 +24,10 @@ func (f *File) Name() string {
 	return f.name
 }
 
+// Locate returns the source position of path. Concurrent Locate calls on the
+// same File are safe. Locate must not run at the same time as Set or Delete:
+// those methods rewrite the syntax tree, and an in-flight Locate can read a
+// torn tree or put a stale position index back after it was cleared.
 func (f *File) Locate(path []string) (Location, bool) {
 	if f == nil || f.body == nil {
 		return Location{}, false

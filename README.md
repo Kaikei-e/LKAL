@@ -86,7 +86,7 @@ Error codes are grouped by stage:
 | `L101`–`L107` | Syntax | broken header (`L101`), bare word value (`L102`), unclosed bracket (`L103`), gap in `\\` lines (`L104`), `@lkal` declaration (`L105`), unexpected token (`L106`), >1000 nesting depth (`L107`) |
 | `L201`–`L207` | Semantic | duplicate key or conflicting path (`L201`), mixed-type list (`L204`), `$`-prefixed key or label (`L205`), unsupported version (`L207`) |
 | `L301`–`L305` | LKAL-JSON | invalid JSON (`L301`), `null` (`L302`), exponent notation (`L303`), non-scalar list element (`L304`), malformed `$enum` / `$qty` / `$ref` tag (`L305`) |
-| `L401`–`L403` | Path / Value | malformed path (`L401`), path not found (`L402`), invalid `Value` for `Set` (`L403`) |
+| `L401`–`L403` | Path / Value | malformed path (`L401`), path not found (`L402`), invalid `Value` for `Set`, `ValidateValue`, or `Complete` (`L403`) |
 | `L501`–`L510` | Schema Validation | type mismatch (`L501`), missing required field (`L502`), unknown or reserved field (`L503`), value out of range (`L504`), pattern mismatch (`L505`), value not allowed (`L506`), unit not allowed (`L507`), reference target not allowed (`L508`), duplicate value (`L509`), invalid map key (`L510`) |
 | `L601`–`L607` | Schema Compile | invalid schema (`L601`), unresolved definition (`L602`), definition cycle (`L603`), invalid pattern (`L604`), default does not match its type (`L605`), conflicting constraints (`L606`), unsupported schema version (`L607`) |
 
@@ -111,13 +111,14 @@ Schemas are `@lkal "0.1"` documents (`lkal-schema = "0.2"`, `root { … }`, opti
 | --- | --- |
 | `schema.Compile(name, src)`, `schema.CompileFile(f)` | Validate a schema against `meta.lkal` and compile it into an immutable `*schema.Schema` (`L601`–`L607`) |
 | `s.ID()`, `s.Version()` | Declared top-level `id` and `version` metadata strings |
-| `s.Validate(f)`, `s.ValidateValue(v)` | Validate a `*lkal.File` (with source positions and `Error.Path`) or an arbitrary `lkal.Value` (`L501`–`L510`) |
+| `s.Validate(f)`, `s.ValidateValue(v)` | Validate a `*lkal.File` (with source positions and `Error.Path`) or an arbitrary `lkal.Value` (`L501`–`L510`). `ValidateValue` and `Complete` return `L403` when the value itself breaks LKAL's structural rules (duplicate keys, mixed lists, nesting over 1000, and the same cases as `Set`) |
 | `s.Default(path)` | Look up the declared default `lkal.Value` for a schema `/` path |
 | `s.Complete(v)` | Return a new `lkal.Value` with missing optional fields populated with their declared defaults when their parent `Record` already exists (idempotent; never mutates `v`) |
 
 ## Command
 
 ```text
+lkal version
 lkal fmt [-w] [-l] [--json] FILE…
 lkal check [--schema SCHEMA] [--json] FILE…
 lkal schema check [--json] FILE…
@@ -137,6 +138,12 @@ lkal set --schema app.schema.lkal web.lkal service/web/container/app/image '"ghc
 lkal get web.lkal service/web/container/app/port/http/number   # 8080
 lkal get -r web.lkal service/web/container/app/image           # ghcr.io/acme/web:1.5.0
 ```
+
+## Release
+
+`lkal version` (also `--version` and `-version`) prints the version embedded at link time (`-X main.version`, the release tag). If that is unset, it prints the module version from `debug.BuildInfo`, which `go install` and a local `go build` provide, and `devel` when that version is empty or `(devel)`.
+
+Tagged releases are cut from `main` with the Release workflow. The exact steps, including the `version` input such as `v0.2.0`, are in [`docs/RELEASING.md`](docs/RELEASING.md). This repository does not publish a release until that workflow runs.
 
 ## Development
 

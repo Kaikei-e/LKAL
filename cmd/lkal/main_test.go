@@ -73,6 +73,24 @@ func hasUsageLine(stderr string) bool {
 	return false
 }
 
+func TestVersion(t *testing.T) {
+	var got string
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-version"}} {
+		code, stdout, stderr := execRun(t, args)
+		if code != 0 || stderr != "" || stdout == "" {
+			t.Fatalf("run(%v) code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+		if got == "" {
+			got = stdout
+		} else if stdout != got {
+			t.Errorf("run(%v) stdout=%q, want %q", args, stdout, got)
+		}
+	}
+	if got != "devel\n" {
+		t.Errorf("version stdout=%q, want devel (test binary has no ldflags or module version)", got)
+	}
+}
+
 func TestUsageErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1889,6 +1907,11 @@ func TestSetWithSchema(t *testing.T) {
 				!strings.Contains(stderr, "  hint: "+tc.wantHint+"\n") {
 				t.Errorf("unexpected stderr:\n%s", stderr)
 			}
+			// Replacing an existing key keeps that key's position (replicas is line 5, col 3).
+			// A newly inserted key has no source position.
+			if tc.wantCode != "L503" && !strings.Contains(stderr, docFile+":5:3: "+tc.wantCode) {
+				t.Errorf("stderr missing key position for replaced value:\n%s", stderr)
+			}
 			data, err := os.ReadFile(docFile)
 			if err != nil || string(data) != testValidAppDoc {
 				t.Errorf("file was modified on validation failure:\ngot:\n%s\nwant:\n%s", string(data), testValidAppDoc)
@@ -1928,13 +1951,13 @@ func TestSetWithSchema(t *testing.T) {
 		schemaFile := writeTemp(t, dir, "app.schema.lkal", testAppSchema)
 
 		code, stdout, stderr := execRunWithStdin(t, []string{"set", "--schema", schemaFile, "-", "service/web/replicas", `"three"`}, testValidAppDoc)
-		wantText := "-: L501 type mismatch\n  path: service/web/replicas\n  hint: expected int, got string\n"
+		wantText := "-:5:3: L501 type mismatch\n  path: service/web/replicas\n  hint: expected int, got string\n"
 		if code != 1 || stdout != "" || stderr != wantText {
 			t.Errorf("text:\ncode=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantText)
 		}
 
 		code, stdout, stderr = execRunWithStdin(t, []string{"set", "--schema", schemaFile, "--json", "-", "service/web/replicas", `"three"`}, testValidAppDoc)
-		wantJSON := `[{"file":"-","line":0,"col":0,"code":"L501","message":"type mismatch","hint":"expected int, got string","path":"service/web/replicas"}]` + "\n"
+		wantJSON := `[{"file":"-","line":5,"col":3,"code":"L501","message":"type mismatch","hint":"expected int, got string","path":"service/web/replicas"}]` + "\n"
 		if code != 1 || stdout != "" || stderr != wantJSON {
 			t.Errorf("json:\ncode=%d stdout=%q\nstderr=%q\nwant  =%q", code, stdout, stderr, wantJSON)
 		}

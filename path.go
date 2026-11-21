@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Kaikei-e/LKAL/internal/syntax"
 )
 
 func (f *File) Get(path string) (Value, error) {
@@ -33,6 +35,17 @@ func (f *File) Get(path string) (Value, error) {
 	return cur, nil
 }
 
+// ValueHint reports why v is not a structurally valid LKAL value, starting at
+// nesting depth 0. An empty string means v is valid. Set and the schema
+// package share this check so the two cannot drift.
+func ValueHint(v Value) string {
+	return validateValue(v, 0)
+}
+
+// Set writes v at path. It must not run concurrently with Locate, Get, Delete,
+// or another Set on the same File. Replacing an existing entry keeps that
+// entry's key position and the positions of labels that still match; the new
+// value itself has no source position.
 func (f *File) Set(path string, v Value) error {
 	segs, ok := parseRefBody(path)
 	if !ok {
@@ -70,6 +83,17 @@ func (f *File) Set(path string, v Value) error {
 	}
 
 	newEnt := buildEntryFromPathAndValue(remSegs, vNorm, layoutEnt)
+	// A replaced entry keeps the source position of its key and of any labels
+	// that still match. The new value has no source position; validation falls
+	// back to this key position. See ADR 0012.
+	if oldEnt != nil {
+		newEnt.keyPos = oldEnt.keyPos
+		for i := range newEnt.labels {
+			if i < len(oldEnt.labels) && newEnt.labels[i].text == oldEnt.labels[i].text {
+				newEnt.labels[i].pos = oldEnt.labels[i].pos
+			}
+		}
+	}
 
 	switch {
 	case exactIdx != -1:
@@ -97,6 +121,8 @@ func (f *File) Set(path string, v Value) error {
 	return nil
 }
 
+// Delete removes path. It must not run concurrently with Locate, Get, Set,
+// or another Delete on the same File.
 func (f *File) Delete(path string) error {
 	segs, ok := parseRefBody(path)
 	if !ok {
@@ -305,50 +331,15 @@ func notFoundError(file, seg string) error {
 	return pathError(file, "L402", "check the path at segment "+quoteString(seg))
 }
 
-func scanNumber(s string) (int, bool, bool) {
-	s = strings.TrimPrefix(s, "-")
-	if len(s) == 0 {
-		return 0, false, false
-	}
-	intDigits := 0
-	if s[0] == '0' {
-		intDigits = 1
-		s = s[1:]
-		if len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
-			return 0, false, false
-		}
-	} else if s[0] >= '1' && s[0] <= '9' {
-		for len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
-			intDigits++
-			s = s[1:]
-		}
-	} else {
-		return 0, false, false
-	}
-	hasFrac := false
-	fracDigits := 0
-	if strings.HasPrefix(s, ".") {
-		hasFrac = true
-		s = s[1:]
-		for len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
-			fracDigits++
-			s = s[1:]
-		}
-		if fracDigits == 0 {
-			return 0, false, false
-		}
-	}
-	if len(s) > 0 {
-		return 0, false, false
-	}
-	return intDigits + fracDigits, hasFrac, true
-}
+func scanNumber(s string) (int, bool, bool) { return syntax.ScanNumber(s) }
 
 func validateValue(v Value, depth int) string {
 	if v == nil {
 		return "use a non-nil value"
 	}
 	switch val := v.(type) {
+	case Int, Bool:
+		// Always structurally valid.
 	case String:
 		if !utf8.ValidString(string(val)) {
 			return "use valid UTF-8 text"
@@ -434,6 +425,8 @@ func validateValue(v Value, depth int) string {
 				return hint
 			}
 		}
+	default:
+		return "use a valid LKAL value"
 	}
 	return ""
 }

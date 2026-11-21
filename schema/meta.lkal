@@ -100,89 +100,6 @@ def "type-spec" {
     unique = true
     items { type = .string }
   }
-}
-
-def "field-spec" {
-  doc = "Specification of a record field, extending type-spec with field attributes."
-  type = .record
-  field "doc" { type = .string }
-  field "type" {
-    type = .enum
-    values = [.string, .int, .decimal, .bool, .enum, .quantity, .ref, .list, .record, .map, .any]
-  }
-  field "types" {
-    type = .list
-    min-items = 2
-    unique = true
-    items {
-      type = .enum
-      values = [.string, .int, .decimal, .bool, .enum, .quantity, .ref]
-    }
-  }
-  field "use" {
-    type = .ref
-    targets = [&def]
-    min-segments = 2
-    max-segments = 2
-  }
-  field "min-length" { type = .int, min = 0 }
-  field "max-length" { type = .int, min = 0 }
-  field "pattern" { type = .string }
-  field "one-of" {
-    type = .list
-    min-items = 1
-    items {
-      types = [.string, .int, .decimal]
-    }
-  }
-  field "min" {
-    types = [.int, .decimal]
-  }
-  field "max" {
-    types = [.int, .decimal]
-  }
-  field "values" {
-    doc = "Allowed enum values; validated by the schema compiler as a non-empty list of enums."
-    type = .any
-  }
-  field "units" {
-    type = .list
-    min-items = 1
-    items {
-      type = .string
-      pattern = "[A-Za-z]+"
-    }
-  }
-  field "targets" {
-    type = .list
-    min-items = 1
-    items { type = .ref }
-  }
-  field "min-segments" { type = .int, min = 0 }
-  field "max-segments" { type = .int, min = 1 }
-  field "items" { use = &def/type-spec }
-  field "min-items" { type = .int, min = 0 }
-  field "max-items" { type = .int, min = 0 }
-  field "unique" { type = .bool, default = false }
-  field "field" {
-    type = .map
-    value { use = &def/field-spec }
-  }
-  field "open" { type = .bool, default = false }
-  field "reserved" {
-    type = .list
-    items { type = .string }
-  }
-  field "value" { use = &def/type-spec }
-  field "key" { use = &def/key-spec }
-  field "min-entries" { type = .int, min = 0 }
-  field "max-entries" { type = .int, min = 0 }
-  field "unique-by" {
-    type = .list
-    min-items = 1
-    unique = true
-    items { type = .string }
-  }
   field "required" { type = .bool, default = false }
   field "default" {
     doc = "Declarative default value; validated by the schema compiler against the field's compiled type."
@@ -193,6 +110,11 @@ def "field-spec" {
     type = .record
     open = true
   }
+}
+
+def "field-spec" {
+  doc = "A record field. Same shape as type-spec, including required, default, deprecated and ext."
+  use = &def/type-spec
 }
 
 root {

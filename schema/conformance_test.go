@@ -834,6 +834,11 @@ func TestCoreDoesNotImportSchema(t *testing.T) {
 			if impPath == "github.com/Kaikei-e/LKAL/schema" || strings.HasPrefix(impPath, "github.com/Kaikei-e/LKAL/schema/") {
 				t.Errorf("root package file %s illegally imports schema package %q", path, impPath)
 			}
+			// Shared text helpers live in this module's internal package.
+			// schema may import them too; the root package must not import schema.
+			if strings.HasPrefix(impPath, "github.com/Kaikei-e/LKAL/internal/") {
+				continue
+			}
 			firstSeg, _, _ := strings.Cut(impPath, "/")
 			if strings.Contains(firstSeg, ".") {
 				t.Errorf("root package file %s imports non-stdlib package %q", path, impPath)

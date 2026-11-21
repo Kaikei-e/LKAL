@@ -86,7 +86,7 @@ bad.lkal:2:12: L102 bare word in value position
 | `L101`–`L107` | 構文解析 | 見出し行の改行（`L101`）、値の位置の裸の単語（`L102`）、未閉鎖の括弧（`L103`）、`\\` 行の途中の空行・コメント（`L104`）、`@lkal` 宣言（`L105`）、予期しないトークン（`L106`）、1000段超の入れ子（`L107`） |
 | `L201`–`L207` | 意味規則 | 重複キーまたは経路衝突（`L201`）、型の混在リスト（`L204`）、`$` で始まるキー・ラベル（`L205`）、未対応の版（`L207`） |
 | `L301`–`L305` | LKAL-JSON | 不正な JSON（`L301`）、`null`（`L302`）、指数表記（`L303`）、非スカラーのリスト要素（`L304`）、不正な `$enum` / `$qty` / `$ref` タグ（`L305`） |
-| `L401`–`L403` | パス・値操作 | 不正なパス（`L401`）、存在しないパス（`L402`）、`Set` に渡した不正な `Value`（`L403`） |
+| `L401`–`L403` | パス・値操作 | 不正なパス（`L401`）、存在しないパス（`L402`）、`Set`・`ValidateValue`・`Complete` に渡した不正な `Value`（`L403`） |
 | `L501`–`L510` | スキーマ検証 | 型の不一致（`L501`）、必須フィールド欠落（`L502`）、未知・予約済みフィールド（`L503`）、範囲外の値（`L504`）、正規表現の不一致（`L505`）、許可されていない値（`L506`）、許可されていない単位（`L507`）、許可されていない参照先（`L508`）、重複した値（`L509`）、不正なマップキー（`L510`） |
 | `L601`–`L607` | スキーマ定義 | 不正なスキーマ構造（`L601`）、未定義の参照先（`L602`）、定義の循環（`L603`）、不正な正規表現（`L604`）、デフォルト値の型・制約違反（`L605`）、矛盾する制約（`L606`）、未対応のスキーマ版（`L607`） |
 
@@ -111,13 +111,14 @@ bad.lkal:2:12: L102 bare word in value position
 | --- | --- |
 | `schema.Compile(name, src)`, `schema.CompileFile(f)` | スキーマをメタスキーマ `meta.lkal` で検証し、不変な `*schema.Schema` にコンパイルする（`L601`–`L607`） |
 | `s.ID()`, `s.Version()` | スキーマ先頭に宣言された `id` と `version` メタデータの取得 |
-| `s.Validate(f)`, `s.ValidateValue(v)` | `*lkal.File`（ソース位置および `Error.Path` 付き）または任意の `lkal.Value` を検証する（`L501`–`L510`） |
+| `s.Validate(f)`, `s.ValidateValue(v)` | `*lkal.File`（ソース位置および `Error.Path` 付き）または任意の `lkal.Value` を検証する（`L501`–`L510`）。`ValidateValue` と `Complete` は、値が LKAL の構造規則を破るとき（重複キー、混合リスト、1000 段を超える入れ子、`Set` と同じケース）`L403` を返す |
 | `s.Default(path)` | スキーマ上の `/` パスに宣言された `default` 値（`lkal.Value`）を取得する |
 | `s.Complete(v)` | 親の `Record` がすでに存在する場合に限り、省略された任意フィールドへ宣言的 `default` を補完した新しい `lkal.Value` を返す（冪等・非破壊） |
 
 ## コマンド
 
 ```text
+lkal version
 lkal fmt [-w] [-l] [--json] FILE…
 lkal check [--schema SCHEMA] [--json] FILE…
 lkal schema check [--json] FILE…
@@ -137,6 +138,12 @@ lkal set --schema app.schema.lkal web.lkal service/web/container/app/image '"ghc
 lkal get web.lkal service/web/container/app/port/http/number   # 8080
 lkal get -r web.lkal service/web/container/app/image           # ghcr.io/acme/web:1.5.0
 ```
+
+## リリース
+
+`lkal version`（`--version` と `-version` も同じ）は、リンク時に埋め込んだ版（`-X main.version`、リリースタグ）を出します。未設定のときは `debug.BuildInfo` のモジュール版を使い、`go install` や手元の `go build` ではそちらが出ます。その版が空または `(devel)` のときは `devel` です。
+
+タグ付きリリースは `main` から Release ワークフローで作ります。`v0.2.0` のような `version` 入力を含む手順は [`docs/RELEASING.md`](docs/RELEASING.md) にあります。このリポジトリは、そのワークフローを実行するまでリリースを公開しません。
 
 ## 開発
 

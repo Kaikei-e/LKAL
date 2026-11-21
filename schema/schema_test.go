@@ -88,9 +88,9 @@ func TestMetaSchemaSelfHostingAndCanonicalFormat(t *testing.T) {
 
 	// Verify meta.lkal uses type = .any ONLY on `values` and `default`.
 	countAny := bytes.Count(metaBytes, []byte("type = .any"))
-	// Once in def "type-spec" (values), twice in def "field-spec" (values, default) => 3 occurrences total.
-	if countAny != 3 {
-		t.Errorf("expected exactly 3 occurrences of `type = .any` in meta.lkal (values in type-spec, values+default in field-spec), got %d", countAny)
+	// values and default, both on the shared type-spec. field-spec is a use alias.
+	if countAny != 2 {
+		t.Errorf("expected exactly 2 occurrences of `type = .any` in meta.lkal (values and default on type-spec), got %d", countAny)
 	}
 }
 
@@ -1440,8 +1440,8 @@ root {
 		}
 	}
 
-	// Complete guards against infinite self-referential default expansion.
-	infSchema := mustCompile(t, `@lkal "0.1"
+	// A default that expands back into the same record is rejected at compile time.
+	_, err = Compile("inf.lkal", []byte(`@lkal "0.1"
 lkal-schema = "0.2"
 def "loop" {
   type = .record
@@ -1456,11 +1456,88 @@ root {
     default {}
   }
 }
-`)
-	_, err = infSchema.Complete(lkal.Record{})
+`))
 	errs := assertErrorList(t, err)
-	if errs[0].Code != "L403" {
-		t.Errorf("infinite default Complete got %s, want L403", errs[0].Code)
+	if !hasErrorCode(errs, "L606") {
+		t.Fatalf("cyclic default expansion got:\n%v\nwant L606", err)
+	}
+	foundCycle := false
+	for _, e := range errs {
+		if e.Code == "L606" && strings.Contains(e.Hint, "default expansion cycles") && strings.Contains(e.Path, "default") {
+			foundCycle = true
+		}
+	}
+	if !foundCycle {
+		t.Errorf("cyclic default errors = %v, want L606 on a default path", errs)
+	}
+}
+
+func TestUnionOneOfCoversEveryMember(t *testing.T) {
+	_, err := Compile("cover.lkal", []byte(`@lkal "0.1"
+lkal-schema = "0.2"
+root {
+  field "timeout" {
+    types = [.string, .int]
+    one-of = ["none", "infinite"]
+    min = 1
+    max = 60
+  }
+}
+`))
+	errs := assertErrorList(t, err)
+	if !hasErrorCode(errs, "L606") {
+		t.Fatalf("string one-of on string|int got:\n%v\nwant L606", err)
+	}
+
+	s := mustCompile(t, `@lkal "0.1"
+lkal-schema = "0.2"
+root {
+  field "n" {
+    types = [.int, .decimal]
+    one-of = [1, 2]
+  }
+}
+`)
+	for _, src := range []string{
+		"@lkal \"0.1\"\nn = 1\n",
+		"@lkal \"0.1\"\nn = 2\n",
+		"@lkal \"0.1\"\nn = 1.0\n",
+		"@lkal \"0.1\"\nn = 2.0\n",
+	} {
+		if err := s.Validate(mustParse(t, "ok.lkal", src)); err != nil {
+			t.Errorf("Validate(%q) = %v, want nil", src, err)
+		}
+	}
+	for _, src := range []string{
+		"@lkal \"0.1\"\nn = 3\n",
+		"@lkal \"0.1\"\nn = 1.5\n",
+	} {
+		err := s.Validate(mustParse(t, "bad.lkal", src))
+		errs := assertErrorList(t, err)
+		if len(errs) != 1 || errs[0].Code != "L506" || errs[0].Path != "n" {
+			t.Errorf("Validate(%q) = %v, want one L506 on n", src, errs)
+		}
+	}
+}
+
+func TestCompleteDepthHintDistinguishesDefaultExpansion(t *testing.T) {
+	spec := &typeSpec{
+		kind:       kindRecord,
+		kindMask:   kindBit(kindRecord),
+		fields:     map[string]*fieldSpec{},
+		fieldOrder: []string{"a"},
+	}
+	spec.fields["a"] = &fieldSpec{name: "a", spec: spec}
+
+	cur := lkal.Value(lkal.Int(1))
+	for i := 0; i < 1002; i++ {
+		cur = lkal.Record{Fields: []lkal.Field{{Key: "a", Value: cur}}}
+	}
+	if _, hint := completeNode(spec, cur, 0, false); hint != "nest blocks at most 1000 levels deep" {
+		t.Errorf("input nesting hint = %q", hint)
+	}
+	if _, hint := completeNode(spec, cur, 0, true); hint != "default expansion exceeded 1000 levels" {
+		t.Errorf("default expansion hint = %q", hint)
 	}
 }
 
@@ -1547,12 +1624,15 @@ func TestScalarUnionConstraintsAndMultiErrorCollection(t *testing.T) {
 	s := mustCompile(t, `@lkal "0.1"
 lkal-schema = "0.2"
 root {
+  field "label" {
+    type = .string
+    one-of = ["none", "infinite"]
+    default = "none"
+  }
   field "timeout" {
     types = [.string, .int]
-    one-of = ["none", "infinite"]
     min = 1
     max = 60
-    default = "none"
   }
   field "quoted/path" {
     type = .record
@@ -1561,12 +1641,13 @@ root {
 }
 `)
 
-	v, ok := s.Default("timeout")
+	v, ok := s.Default("label")
 	if !ok || !lkal.Equal(v, lkal.String("none")) {
-		t.Errorf("Default(timeout) = (%v, %v), want (none, true)", v, ok)
+		t.Errorf("Default(label) = (%v, %v), want (none, true)", v, ok)
 	}
 
 	okDoc := mustParse(t, "u_ok.lkal", `@lkal "0.1"
+label = "none"
 timeout = 30
 "quoted/path" {
   "true" = 1
@@ -1577,14 +1658,14 @@ timeout = 30
 	}
 
 	badDoc := mustParse(t, "u_bad.lkal", `@lkal "0.1"
-timeout = "never"
+label = "never"
 "quoted/path" {}
 `)
 	errs := assertErrorList(t, s.Validate(badDoc))
 	if len(errs) != 2 {
 		t.Fatalf("got %d errors, want 2:\n%v", len(errs), errs)
 	}
-	if errs[0].Code != "L506" || errs[0].Path != "timeout" {
+	if errs[0].Code != "L506" || errs[0].Path != "label" {
 		t.Errorf("err[0] = %+v", errs[0])
 	}
 	if errs[1].Code != "L502" || errs[1].Path != `"quoted/path"/true` || errs[1].Hint != `add "true"` {

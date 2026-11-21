@@ -8,10 +8,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 
 	lkal "github.com/Kaikei-e/LKAL"
 	"github.com/Kaikei-e/LKAL/schema"
 )
+
+// version is set with -X main.version at release time. go install leaves it
+// empty or "devel"; currentVersion then uses the module version from build info.
+var version = "devel"
 
 const usageText = "usage: lkal <command> [flags] [args...]"
 
@@ -19,9 +24,25 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
+func currentVersion() string {
+	if version != "" && version != "devel" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		v := info.Main.Version
+		if v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "devel"
+}
+
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
+		case "version", "--version", "-version":
+			fmt.Fprintln(stdout, currentVersion())
+			return 0
 		case "fmt":
 			return cmdFmt(args[1:], stdin, stdout, stderr)
 		case "check":

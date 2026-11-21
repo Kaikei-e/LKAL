@@ -72,6 +72,9 @@ func (f *File) Locate(path []string) (Location, bool)
     2. **`spans` が `rem` の真の接頭辞（`m < len(rem)`）**: エントリがブロックなら `rem[m:]` で子ブロックへ降りる（代入ならその下には進めないため `(Location{}, false)`）。
     3. **`rem` が `spans` の真の接頭辞（`len(rem) < m`）**: ラベル圧縮（例: `service "web" "http" { ... }` に対するパス `["service", "web"]`）によって暗黙に導入された中間レコードの最初の出現位置として、`Key: spans[len(rem)-1].pos`, `Value: spans[len(rem)].pos` を返す。
 
+- `Set` が既存の項目を置き換えるときは、その項目のキー位置と、テキストが一致するラベルの位置を残す。新しい値ノードにはソース位置が無い。スキーマ検証その他のエラーは、値の位置が空のとき同じパスのキー位置を使う。
+- `(*File).Locate` は、同じ `*File` に対する他の `Locate` と同時に呼んでよい。`Set` および `Delete` とは同時に呼ばない。これらは構文木を書き換え、進行中の `Locate` が壊れた木を読む、または無効化した位置索引を復活させることがある。
+
 ## 根拠（調査結果・出典）
 
 - [[0001]]（2 層構成）および `docs/PRINCIPLE.md`（Out of Scope: Schema-dependent semantics）:

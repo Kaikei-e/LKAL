@@ -193,11 +193,12 @@ func (ts *typeSpec) expectedTypeNames() string {
 }
 
 type fieldSpec struct {
-	name       string
-	spec       *typeSpec
-	required   bool
-	hasDefault bool
-	defVal     lkal.Value
+	name        string
+	spec        *typeSpec
+	required    bool
+	hasDefault  bool
+	defVal      lkal.Value
+	defaultPath []string
 }
 
 type keySpec struct {
@@ -337,6 +338,7 @@ func compileFile(f *lkal.File, useMeta bool) (*Schema, error) {
 	c.checkListItems()
 	c.checkUniqueBys()
 	c.checkDefaults()
+	c.checkDefaultCycles(rootSpec)
 
 	if len(c.errs) > 0 {
 		return nil, toErrorList(c.errs)
@@ -455,9 +457,10 @@ func (c *compiler) compileFieldSpec(name string, rec lkal.Record, path []string)
 	fs.spec = c.compileTypeSpec(rec, path, true)
 
 	if fs.hasDefault {
+		fs.defaultPath = appendSeg(path, "default")
 		c.defaults = append(c.defaults, pendingDefault{
 			field: fs,
-			path:  appendSeg(path, "default"),
+			path:  fs.defaultPath,
 		})
 	}
 	return fs
@@ -465,6 +468,15 @@ func (c *compiler) compileFieldSpec(name string, rec lkal.Record, path []string)
 
 func (c *compiler) compileTypeSpec(rec lkal.Record, path []string, isField bool) *typeSpec {
 	ts := &typeSpec{}
+	if !isField {
+		for _, f := range rec.Fields {
+			switch f.Key {
+			case "required", "default", "deprecated", "ext":
+				kp := appendSeg(path, f.Key)
+				c.addErr(c.locate(kp).Key, kp, "L601", f.Key+" is only allowed on a record field")
+			}
+		}
+	}
 
 	typeVal, hasType := findField(rec, "type")
 	typesVal, hasTypes := findField(rec, "types")
@@ -551,12 +563,11 @@ func (c *compiler) compileTypeSpec(rec lkal.Record, path []string, isField bool)
 		}
 	}
 
-	c.compileConstraints(ts, rec, path, isField)
+	c.compileConstraints(ts, rec, path)
 	return ts
 }
 
-func (c *compiler) compileConstraints(ts *typeSpec, rec lkal.Record, path []string, isField bool) {
-	_ = isField
+func (c *compiler) compileConstraints(ts *typeSpec, rec lkal.Record, path []string) {
 	hasString := ts.kindMask&kindBit(kindString) != 0
 	hasInt := ts.kindMask&kindBit(kindInt) != 0
 	hasDecimal := ts.kindMask&kindBit(kindDecimal) != 0
@@ -987,6 +998,8 @@ func (c *compiler) compileConstraints(ts *typeSpec, rec lkal.Record, path []stri
 			}
 		}
 	}
+	c.checkUnionOneOfCoverage(ts, path)
+
 	if len(ts.decOneOf) > 0 && (ts.hasMin || ts.hasMax) {
 		oneOfPath := appendSeg(path, "one-of")
 		var (
@@ -1348,6 +1361,100 @@ func (c *compiler) checkDefaults() {
 			}
 			c.addErr(c.locate(p.path).Value, p.path, "L605", hint)
 		}
+	}
+}
+
+func (c *compiler) checkUnionOneOfCoverage(ts *typeSpec, path []string) {
+	if !ts.isUnion || (!ts.hasNumericOneOf() && len(ts.strOneOf) == 0) {
+		return
+	}
+	var missing []string
+	for _, k := range ts.kinds {
+		if !unionOneOfCovers(ts, k) {
+			missing = append(missing, kindNames[k])
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	kp := appendSeg(path, "one-of")
+	c.addErr(c.locate(kp).Key, kp, "L606", "one-of does not cover "+joinOr(missing))
+}
+
+func unionOneOfCovers(ts *typeSpec, k valueKind) bool {
+	switch k {
+	case kindString:
+		return len(ts.strOneOf) > 0
+	case kindInt, kindDecimal:
+		return ts.hasNumericOneOf()
+	default:
+		return false
+	}
+}
+
+func (c *compiler) checkDefaultCycles(root *typeSpec) {
+	expanded := map[*typeSpec]bool{}
+	var expand func(spec *typeSpec, stack map[*typeSpec]bool, via []string)
+	expand = func(spec *typeSpec, stack map[*typeSpec]bool, via []string) {
+		if spec == nil || spec.broken {
+			return
+		}
+		spec = spec.deref()
+		if spec == nil || spec.broken || spec.isUnion {
+			return
+		}
+		if stack[spec] {
+			if via != nil {
+				c.addErr(c.locate(via).Value, via, "L606", "default expansion cycles")
+			}
+			return
+		}
+		if spec.kind == kindMap {
+			expand(spec.mapValue, stack, via)
+			return
+		}
+		if spec.kind != kindRecord || expanded[spec] {
+			return
+		}
+		expanded[spec] = true
+		stack[spec] = true
+		for _, name := range spec.fieldOrder {
+			fs := spec.fields[name]
+			if fs == nil || !fs.hasDefault {
+				continue
+			}
+			expand(fs.spec, stack, fs.defaultPath)
+		}
+		stack[spec] = false
+	}
+	visited := map[*typeSpec]bool{}
+	var visit func(spec *typeSpec)
+	visit = func(spec *typeSpec) {
+		if spec == nil || spec.broken {
+			return
+		}
+		spec = spec.deref()
+		if spec == nil || spec.broken || spec.isUnion || visited[spec] {
+			return
+		}
+		visited[spec] = true
+		switch spec.kind {
+		case kindRecord:
+			expand(spec, map[*typeSpec]bool{}, nil)
+			for _, name := range spec.fieldOrder {
+				if fs := spec.fields[name]; fs != nil {
+					visit(fs.spec)
+				}
+			}
+		case kindMap:
+			visit(spec.mapValue)
+		case kindList:
+			visit(spec.items)
+		}
+	}
+	visit(root)
+	for _, name := range c.defOrder {
+		visit(c.defs[name])
 	}
 }
 

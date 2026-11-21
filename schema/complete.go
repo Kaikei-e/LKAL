@@ -7,7 +7,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/Kaikei-e/LKAL"
+	"github.com/Kaikei-e/LKAL/internal/syntax"
 )
+
+const maxBlockDepth = 1000
 
 // Default returns a deep-cloned copy of the declarative default value declared
 // at path, or (nil, false) if path is malformed or does not resolve to a record
@@ -76,7 +79,7 @@ func (s *Schema) Complete(v lkal.Value) (lkal.Value, error) {
 			newError("", lkal.Pos{}, "", "L403", "expected a record"),
 		})
 	}
-	out, hint := completeNode(s.root, v, 0)
+	out, hint := completeNode(s.root, v, 0, false)
 	if hint != "" {
 		return nil, toErrorList([]*lkal.Error{
 			newError("", lkal.Pos{}, "", "L403", hint),
@@ -85,7 +88,7 @@ func (s *Schema) Complete(v lkal.Value) (lkal.Value, error) {
 	return out, nil
 }
 
-func completeNode(spec *typeSpec, v lkal.Value, depth int) (lkal.Value, string) {
+func completeNode(spec *typeSpec, v lkal.Value, depth int, fromDefault bool) (lkal.Value, string) {
 	if spec != nil {
 		spec = spec.deref()
 	}
@@ -94,6 +97,9 @@ func completeNode(spec *typeSpec, v lkal.Value, depth int) (lkal.Value, string) 
 		return normalizeAndClone(v), ""
 	}
 	if depth > maxBlockDepth {
+		if fromDefault {
+			return nil, "default expansion exceeded 1000 levels"
+		}
 		return nil, "nest blocks at most 1000 levels deep"
 	}
 	if spec == nil || spec.isUnion {
@@ -113,7 +119,7 @@ func completeNode(spec *typeSpec, v lkal.Value, depth int) (lkal.Value, string) 
 			if fs, ok := spec.fields[f.Key]; ok {
 				childSpec = fs.spec
 			}
-			cv, hint := completeNode(childSpec, f.Value, depth+1)
+			cv, hint := completeNode(childSpec, f.Value, depth+1, fromDefault)
 			if hint != "" {
 				return nil, hint
 			}
@@ -122,7 +128,7 @@ func completeNode(spec *typeSpec, v lkal.Value, depth int) (lkal.Value, string) 
 		for _, name := range spec.fieldOrder {
 			fs := spec.fields[name]
 			if !present[name] && fs.hasDefault {
-				cv, hint := completeNode(fs.spec, fs.defVal, depth+1)
+				cv, hint := completeNode(fs.spec, fs.defVal, depth+1, true)
 				if hint != "" {
 					return nil, hint
 				}
@@ -137,7 +143,7 @@ func completeNode(spec *typeSpec, v lkal.Value, depth int) (lkal.Value, string) 
 			outFields = make([]lkal.Field, 0, len(rec.Fields))
 		}
 		for _, entry := range rec.Fields {
-			cv, hint := completeNode(spec.mapValue, entry.Value, depth+1)
+			cv, hint := completeNode(spec.mapValue, entry.Value, depth+1, fromDefault)
 			if hint != "" {
 				return nil, hint
 			}
@@ -178,31 +184,7 @@ func normalizeAndClone(v lkal.Value) lkal.Value {
 	}
 }
 
-func normalizeNumber(s string) string {
-	if s == "-0" {
-		return "0"
-	}
-	intPart, fracPart, hasDot := strings.Cut(s, ".")
-	if !hasDot {
-		return s
-	}
-	isNeg := false
-	if strings.HasPrefix(intPart, "-") {
-		isNeg = true
-		intPart = intPart[1:]
-	}
-	fracPart = strings.TrimRight(fracPart, "0")
-	if fracPart == "" {
-		fracPart = "0"
-	}
-	if intPart == "0" && fracPart == "0" {
-		return "0.0"
-	}
-	if isNeg {
-		return "-" + intPart + "." + fracPart
-	}
-	return intPart + "." + fracPart
-}
+func normalizeNumber(s string) string { return syntax.NormalizeNumber(s) }
 
 func isRefSegmentChar(b byte) bool {
 	return (b >= 'A' && b <= 'Z') ||

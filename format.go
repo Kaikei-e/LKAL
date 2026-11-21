@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strconv"
 	"strings"
+
+	"github.com/Kaikei-e/LKAL/internal/syntax"
 )
 
 // Format parses src and returns its canonical form. On a parse error it
@@ -306,17 +308,7 @@ func formatKey(k string) string {
 	return quoteString(k)
 }
 
-func isBareKey(k string) bool {
-	if k == "" || k == "true" || k == "false" || !lexIsNameStart(k[0]) {
-		return false
-	}
-	for i := 1; i < len(k); i++ {
-		if !lexIsNameChar(k[i]) {
-			return false
-		}
-	}
-	return true
-}
+func isBareKey(k string) bool { return syntax.IsBareKey(k) }
 
 func isBareRefSegment(s string) bool {
 	if s == "" {
@@ -345,30 +337,4 @@ func refBody(r Ref) string {
 	return b.String()
 }
 
-func quoteString(s string) string {
-	var b strings.Builder
-	b.Grow(len(s) + 2)
-	b.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			b.WriteString(`\"`)
-		case '\\':
-			b.WriteString(`\\`)
-		case '\n':
-			b.WriteString(`\n`)
-		case '\r':
-			b.WriteString(`\r`)
-		default:
-			if isControlChar(r) {
-				b.WriteString(`\u{`)
-				b.WriteString(strconv.FormatInt(int64(r), 16))
-				b.WriteByte('}')
-			} else {
-				b.WriteRune(r)
-			}
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
-}
+func quoteString(s string) string { return syntax.QuoteString(s) }

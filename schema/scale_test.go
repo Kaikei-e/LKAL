@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"testing"
@@ -9,6 +10,52 @@ import (
 
 	"github.com/Kaikei-e/LKAL"
 )
+
+// assertLinear8x checks that run4N costs at most 8x runN. The smaller batch is
+// repeated until it takes at least 25ms, and the best of five paired ratios is
+// kept. A quadratic implementation is about 16x, so this still fails a real
+// super-linear regression. Millisecond-scale samples under the race detector
+// no longer fail the check by themselves.
+func assertLinear8x(t *testing.T, runN, run4N func()) {
+	t.Helper()
+	reps := 1
+	for reps < 4096 {
+		start := time.Now()
+		for i := 0; i < reps; i++ {
+			runN()
+		}
+		if time.Since(start) >= 25*time.Millisecond {
+			break
+		}
+		reps *= 2
+	}
+	best := math.MaxFloat64
+	for trial := 0; trial < 5; trial++ {
+		runtime.GC()
+		start := time.Now()
+		for i := 0; i < reps; i++ {
+			runN()
+		}
+		dN := time.Since(start)
+		runtime.GC()
+		start = time.Now()
+		for i := 0; i < reps; i++ {
+			run4N()
+		}
+		d4 := time.Since(start)
+		ratio := math.Inf(1)
+		if dN > 0 {
+			ratio = float64(d4) / float64(dN)
+		}
+		if ratio < best {
+			best = ratio
+		}
+		t.Logf("reps=%d trial=%d N=%v 4N=%v ratio=%.2fx", reps, trial, dN, d4, ratio)
+	}
+	if best > 8 {
+		t.Errorf("best 4N/N ratio %.2fx exceeds 8x", best)
+	}
+}
 
 func TestValidateScalesLinearly(t *testing.T) {
 	if testing.Short() {
@@ -74,22 +121,6 @@ root {
 		return f
 	}
 
-	measureMin := func(f *lkal.File) time.Duration {
-		// Warmup run.
-		_ = s.Validate(f)
-		var minDur time.Duration
-		for i := 0; i < 3; i++ {
-			runtime.GC()
-			start := time.Now()
-			_ = s.Validate(f)
-			d := time.Since(start)
-			if i == 0 || d < minDur {
-				minDur = d
-			}
-		}
-		return minDur
-	}
-
 	cases := []struct {
 		name        string
 		baseN       int
@@ -120,21 +151,10 @@ root {
 				}
 			}
 
-			durN := measureMin(docN)
-			dur4N := measureMin(doc4N)
-			ratio := 0.0
-			if durN > 0 {
-				ratio = float64(dur4N) / float64(durN)
-			}
-			t.Logf("N=%d: %v, 4N=%d: %v (ratio: %.2fx)", tc.baseN, durN, tc.baseN*4, dur4N, ratio)
-
-			if dur4N > 8*durN {
-				if durN > 0 {
-					t.Errorf("4N duration %v exceeds 8x N duration %v (ratio: %.2fx)", dur4N, durN, ratio)
-				} else {
-					t.Errorf("4N duration %v exceeds 8x N duration %v", dur4N, durN)
-				}
-			}
+			assertLinear8x(t,
+				func() { _ = s.Validate(docN) },
+				func() { _ = s.Validate(doc4N) },
+			)
 		})
 	}
 
@@ -150,36 +170,10 @@ root {
 		}
 		checkErr("docN", sch.Validate(docN))
 		checkErr("doc4N", sch.Validate(doc4N))
-
-		measure := func(f *lkal.File) time.Duration {
-			_ = sch.Validate(f)
-			var minDur time.Duration
-			for i := 0; i < 3; i++ {
-				runtime.GC()
-				start := time.Now()
-				_ = sch.Validate(f)
-				d := time.Since(start)
-				if i == 0 || d < minDur {
-					minDur = d
-				}
-			}
-			return minDur
-		}
-
-		durN := measure(docN)
-		dur4N := measure(doc4N)
-		ratio := 0.0
-		if durN > 0 {
-			ratio = float64(dur4N) / float64(durN)
-		}
-		t.Logf("N=500: %v, 4N=2000: %v (ratio: %.2fx)", durN, dur4N, ratio)
-		if dur4N > 8*durN {
-			if durN > 0 {
-				t.Errorf("4N duration %v exceeds 8x N duration %v (ratio: %.2fx)", dur4N, durN, ratio)
-			} else {
-				t.Errorf("4N duration %v exceeds 8x N duration %v", dur4N, durN)
-			}
-		}
+		assertLinear8x(t,
+			func() { _ = sch.Validate(docN) },
+			func() { _ = sch.Validate(doc4N) },
+		)
 	}
 
 	t.Run("composite_unique_by", func(t *testing.T) {
@@ -297,31 +291,15 @@ root {
 		}
 		schN, docN := build(500)
 		sch4N, doc4N := build(2000)
-		measure := func(sch *Schema, f *lkal.File) time.Duration {
-			if err := sch.Validate(f); err == nil {
-				t.Fatalf("expected missing required field errors")
-			}
-			var minDur time.Duration
-			for i := 0; i < 3; i++ {
-				runtime.GC()
-				start := time.Now()
-				_ = sch.Validate(f)
-				d := time.Since(start)
-				if i == 0 || d < minDur {
-					minDur = d
-				}
-			}
-			return minDur
+		if err := schN.Validate(docN); err == nil {
+			t.Fatal("expected missing required field errors")
 		}
-		durN := measure(schN, docN)
-		dur4N := measure(sch4N, doc4N)
-		ratio := 0.0
-		if durN > 0 {
-			ratio = float64(dur4N) / float64(durN)
+		if err := sch4N.Validate(doc4N); err == nil {
+			t.Fatal("expected missing required field errors")
 		}
-		t.Logf("N=500: %v, 4N=2000: %v (ratio: %.2fx)", durN, dur4N, ratio)
-		if dur4N > 8*durN {
-			t.Errorf("4N duration %v exceeds 8x N duration %v (ratio: %.2fx)", dur4N, durN, ratio)
-		}
+		assertLinear8x(t,
+			func() { _ = schN.Validate(docN) },
+			func() { _ = sch4N.Validate(doc4N) },
+		)
 	})
 }

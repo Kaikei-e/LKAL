@@ -10,8 +10,6 @@ import (
 	"github.com/Kaikei-e/LKAL"
 )
 
-const maxBlockDepth = 1000
-
 // Validate validates a parsed *lkal.File against s, reporting all violations
 // with source positions, paths, and hints (sorted and capped at 20 errors).
 func (s *Schema) Validate(f *lkal.File) error {
@@ -89,10 +87,19 @@ func (v *validator) elemPos(path []string, idx int) lkal.Pos {
 	} else {
 		loc = v.locate(path)
 	}
-	if idx >= 0 && idx < len(loc.Elems) {
+	if idx >= 0 && idx < len(loc.Elems) && loc.Elems[idx].Line > 0 {
 		return loc.Elems[idx]
 	}
-	return loc.Value
+	return posOrKey(loc)
+}
+
+// posOrKey is the value's source position, or the key position when the value
+// was created by Set and has none. ADR 0012.
+func posOrKey(loc lkal.Location) lkal.Pos {
+	if loc.Value.Line > 0 {
+		return loc.Value
+	}
+	return loc.Key
 }
 
 func (v *validator) addNodeErr(path []string, elemIdx int, code, hint string) {
@@ -101,7 +108,7 @@ func (v *validator) addNodeErr(path []string, elemIdx int, code, hint string) {
 		pos = v.elemPos(path, elemIdx)
 		hint = fmt.Sprintf("element %d: %s", elemIdx+1, hint)
 	} else {
-		pos = v.locate(path).Value
+		pos = posOrKey(v.locate(path))
 	}
 	v.errs = append(v.errs, newError(v.name, pos, formatPath(path), code, hint))
 }
@@ -228,8 +235,8 @@ func (v *validator) validateInt(spec *typeSpec, n int64, path []string, elemIdx 
 	if spec.hasMax && compareBase10(numStr, spec.maxVal) > 0 {
 		v.addNodeErr(path, elemIdx, "L504", "must be <= "+spec.maxVal)
 	}
-	if len(spec.intOneOf) > 0 && !slices.Contains(spec.intOneOf, n) {
-		v.addNodeErr(path, elemIdx, "L506", "use one of "+formatIntList(spec.intOneOf))
+	if spec.hasNumericOneOf() && !spec.numericOneOfMatch(numStr) {
+		v.addNodeErr(path, elemIdx, "L506", spec.numericOneOfHint())
 	}
 }
 
@@ -240,17 +247,8 @@ func (v *validator) validateDecimal(spec *typeSpec, dec string, path []string, e
 	if spec.hasMax && compareBase10(dec, spec.maxVal) > 0 {
 		v.addNodeErr(path, elemIdx, "L504", "must be <= "+spec.maxVal)
 	}
-	if len(spec.decOneOf) > 0 {
-		found := false
-		for _, allowed := range spec.decOneOf {
-			if compareBase10(dec, allowed) == 0 {
-				found = true
-				break
-			}
-		}
-		if !found {
-			v.addNodeErr(path, elemIdx, "L506", "use one of "+strings.Join(spec.decOneOf, ", "))
-		}
+	if spec.hasNumericOneOf() && !spec.numericOneOfMatch(dec) {
+		v.addNodeErr(path, elemIdx, "L506", spec.numericOneOfHint())
 	}
 }
 
@@ -391,7 +389,7 @@ func (v *validator) validateMap(spec *typeSpec, rec lkal.Record, path []string) 
 					dupPath := appendSeg(appendSeg(path, entry.Key), fieldName)
 					hint := fmt.Sprintf("%s %s is also used by %s %s",
 						formatKey(fieldName), formatCanonicalValue(fv), mapName, quoteString(firstKey))
-					v.addErr(v.locate(dupPath).Value, dupPath, "L509", hint)
+					v.addErr(posOrKey(v.locate(dupPath)), dupPath, "L509", hint)
 				} else {
 					seen[vk] = entry.Key
 				}
@@ -565,6 +563,33 @@ func compareBase10(a, b string) int {
 	return cmp
 }
 
+func (ts *typeSpec) hasNumericOneOf() bool {
+	return len(ts.intOneOf) > 0 || len(ts.decOneOf) > 0
+}
+
+func (ts *typeSpec) numericOneOfMatch(numStr string) bool {
+	for _, n := range ts.intOneOf {
+		if compareBase10(numStr, strconv.FormatInt(n, 10)) == 0 {
+			return true
+		}
+	}
+	for _, d := range ts.decOneOf {
+		if compareBase10(numStr, d) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (ts *typeSpec) numericOneOfHint() string {
+	parts := make([]string, 0, len(ts.intOneOf)+len(ts.decOneOf))
+	for _, n := range ts.intOneOf {
+		parts = append(parts, strconv.FormatInt(n, 10))
+	}
+	parts = append(parts, ts.decOneOf...)
+	return "use one of " + strings.Join(parts, ", ")
+}
+
 func splitBase10(s string) (neg bool, intPart, fracPart string) {
 	if strings.HasPrefix(s, "-") {
 		neg = true
@@ -579,177 +604,9 @@ func splitBase10(s string) (neg bool, intPart, fracPart string) {
 	return neg, intPart, fracPart
 }
 
-func scanNumber(s string) (int, bool, bool) {
-	s = strings.TrimPrefix(s, "-")
-	if len(s) == 0 {
-		return 0, false, false
-	}
-	intDigits := 0
-	if s[0] == '0' {
-		intDigits = 1
-		s = s[1:]
-		if len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
-			return 0, false, false
-		}
-	} else if s[0] >= '1' && s[0] <= '9' {
-		for len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
-			intDigits++
-			s = s[1:]
-		}
-	} else {
-		return 0, false, false
-	}
-	hasFrac := false
-	fracDigits := 0
-	if strings.HasPrefix(s, ".") {
-		hasFrac = true
-		s = s[1:]
-		for len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
-			fracDigits++
-			s = s[1:]
-		}
-		if fracDigits == 0 {
-			return 0, false, false
-		}
-	}
-	if len(s) > 0 {
-		return 0, false, false
-	}
-	return intDigits + fracDigits, hasFrac, true
-}
-
-func isRadixPrefix(b byte) bool {
-	return b == 'x' || b == 'X' || b == 'b' || b == 'B' || b == 'o' || b == 'O'
-}
-
-func isValidEnumName(s string) bool {
-	if len(s) == 0 || !isNameStart(s[0]) {
-		return false
-	}
-	for i := 1; i < len(s); i++ {
-		if !isNameChar(s[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func scalarTypeTag(v lkal.Value) string {
-	switch v.(type) {
-	case lkal.String:
-		return "String"
-	case lkal.Int:
-		return "Int"
-	case lkal.Decimal:
-		return "Decimal"
-	case lkal.Bool:
-		return "Bool"
-	case lkal.Enum:
-		return "Enum"
-	case lkal.Quantity:
-		return "Quantity"
-	case lkal.Ref:
-		return "Ref"
-	default:
-		return ""
-	}
-}
-
-// validateStructuralValue checks LKAL's value invariants (matching root Set).
+// validateStructuralValue checks LKAL's value invariants (the same rules as Set).
+// depth is accepted for call-site compatibility; ValueHint counts depth itself.
 func validateStructuralValue(v lkal.Value, depth int) string {
-	if v == nil {
-		return "use a non-nil value"
-	}
-	switch val := v.(type) {
-	case lkal.String:
-		if !utf8.ValidString(string(val)) {
-			return "use valid UTF-8 text"
-		}
-	case lkal.Int, lkal.Bool:
-		// Always structurally valid.
-	case lkal.Decimal:
-		digits, hasFrac, ok := scanNumber(string(val))
-		if !ok || !hasFrac {
-			return "write a decimal such as 0.25"
-		}
-		if digits > 100 {
-			return "keep numbers within 100 digits"
-		}
-	case lkal.Quantity:
-		digits, _, ok := scanNumber(val.Number)
-		if !ok || len(val.Unit) == 0 {
-			return "write a quantity such as 512Mi"
-		}
-		if (val.Number == "0" || val.Number == "-0") && isRadixPrefix(val.Unit[0]) {
-			return "write a quantity such as 512Mi"
-		}
-		for _, r := range val.Unit {
-			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
-				return "write a quantity such as 512Mi"
-			}
-		}
-		if digits > 100 {
-			return "keep numbers within 100 digits"
-		}
-	case lkal.Enum:
-		s := string(val)
-		if !utf8.ValidString(s) {
-			return "use valid UTF-8 text"
-		}
-		if !isValidEnumName(s) {
-			return "write an enum name that starts with a letter or _"
-		}
-	case lkal.Ref:
-		if len(val) == 0 {
-			return "write a reference with at least one segment"
-		}
-		for _, seg := range val {
-			if !utf8.ValidString(seg) {
-				return "use valid UTF-8 text"
-			}
-		}
-	case lkal.List:
-		for _, el := range val {
-			switch el.(type) {
-			case lkal.List, lkal.Record:
-				return "use only scalars as list elements"
-			}
-			if hint := validateStructuralValue(el, depth); hint != "" {
-				return hint
-			}
-		}
-		if len(val) > 1 {
-			t0 := scalarTypeTag(val[0])
-			for _, el := range val[1:] {
-				if scalarTypeTag(el) != t0 {
-					return "use one type for all list elements"
-				}
-			}
-		}
-	case lkal.Record:
-		if depth > maxBlockDepth {
-			return "nest blocks at most 1000 levels deep"
-		}
-		seenKeys := make(map[string]bool, len(val.Fields))
-		for _, f := range val.Fields {
-			if !utf8.ValidString(f.Key) {
-				return "use valid UTF-8 text"
-			}
-			if strings.HasPrefix(f.Key, "$") {
-				return "rename keys that start with $"
-			}
-			if seenKeys[f.Key] {
-				return "remove the duplicate key"
-			}
-			seenKeys[f.Key] = true
-		}
-		for _, f := range val.Fields {
-			if hint := validateStructuralValue(f.Value, depth+1); hint != "" {
-				return hint
-			}
-		}
-	default:
-		return "use a valid LKAL value"
-	}
-	return ""
+	_ = depth
+	return lkal.ValueHint(v)
 }
