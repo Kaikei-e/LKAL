@@ -5,3 +5,6 @@
 
 # Internal documentation
 docs/internal/
+
+# GoReleaser snapshot output
+dist/

@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Kaikei-e/LKAL"
+	"github.com/Kaikei-e/LKAL/internal/syntax"
 )
 
 const maxErrors = 20
@@ -86,25 +87,7 @@ func formatPath(segs []string) string {
 	return string(lkal.FormatValue(lkal.Ref(segs))[1:])
 }
 
-func isNameStart(b byte) bool {
-	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || b == '_'
-}
-
-func isNameChar(b byte) bool {
-	return isNameStart(b) || (b >= '0' && b <= '9') || b == '-'
-}
-
-func isBareKey(k string) bool {
-	if k == "" || k == "true" || k == "false" || !isNameStart(k[0]) {
-		return false
-	}
-	for i := 1; i < len(k); i++ {
-		if !isNameChar(k[i]) {
-			return false
-		}
-	}
-	return true
-}
+func isBareKey(k string) bool { return syntax.IsBareKey(k) }
 
 func formatKey(k string) string {
 	if isBareKey(k) {
@@ -113,37 +96,9 @@ func formatKey(k string) string {
 	return quoteString(k)
 }
 
-func isControlChar(r rune) bool {
-	return (r < 0x20 && r != '\t') || r == 0x7f
-}
+func isControlChar(r rune) bool { return syntax.IsControlChar(r) }
 
-func quoteString(s string) string {
-	var b strings.Builder
-	b.Grow(len(s) + 2)
-	b.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			b.WriteString(`\"`)
-		case '\\':
-			b.WriteString(`\\`)
-		case '\n':
-			b.WriteString(`\n`)
-		case '\r':
-			b.WriteString(`\r`)
-		default:
-			if isControlChar(r) {
-				b.WriteString(`\u{`)
-				b.WriteString(strconv.FormatInt(int64(r), 16))
-				b.WriteByte('}')
-			} else {
-				b.WriteRune(r)
-			}
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
-}
+func quoteString(s string) string { return syntax.QuoteString(s) }
 
 func formatCanonicalValue(v lkal.Value) string {
 	switch val := v.(type) {

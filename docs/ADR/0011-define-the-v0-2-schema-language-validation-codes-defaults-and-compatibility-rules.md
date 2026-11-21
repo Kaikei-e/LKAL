@@ -56,6 +56,8 @@ depends-on: ["0001", "0002", "0004", "0006", "0009", "0010"]
 
 スカラー共用体 `types = [...]` では、列挙された各スカラー型に対応する制約キーを併記でき、入力値の実際のスカラー型に対応する制約を適用する（`.enum` を含む場合は `values` を必須とし、共用体に含まれない型の制約キーは `L601` とする）。
 
+`one-of` は許可集合である。共用体に含まれる型のうち、その `one-of` が制約できない型が一つでもあるときは、コンパイルを `L606` で拒否する（hint は覆えない型を示す）。リストは単一型なので、一つの `one-of` が文字列と整数を同時に並べることはできない。例外として `.int` と `.decimal` は厳密な 10 進比較で同一の `one-of` を共有する（`1` と `1.0` は等しい）。したがって `types = [.int, .decimal]` に `one-of = [1, 2]` と書くと、整数も小数もその集合に含まれるときだけ有効である。文字列の `one-of` は `.string` 以外を覆えないので、`.string` と別の型の共用体に `one-of` を併記することはできない。`min` / `max` や `pattern` は、これまでどおり入力の実際の型にだけ適用する。
+
 ### 4. ドキュメント注釈・フィールド属性と宣言的デフォルト
 
 `doc`（`String`）は共通のドキュメント注釈キーであり、トップレベル、`root`、型指定ブロック（`def` / `items` / `value` の `type-spec`）、`key`（`key-spec`）、および `field`（`field-spec`）のすべてで指定できる。
@@ -71,10 +73,11 @@ depends-on: ["0001", "0002", "0004", "0006", "0009", "0010"]
 - `Parse`、`Validate`、`Format`、`Equal`、`ToJSON` は、スキーマの `default` 値を暗黙に注入したり補完したりしない。
 - デフォルト値の参照と具体化は、`(*Schema).Default(path string) (lkal.Value, bool)` と、入力値を変更せず新しい `lkal.Value` を返す純粋関数 `(*Schema).Complete(v lkal.Value) (lkal.Value, error)` のみを通じて明示的に行う。
 - `Complete` は、親の `Record` がすでに存在する場合にのみ、その中の省略された任意フィールドに `default` を埋める（存在しない親レコードを勝手に生成しない）。`Complete` は冪等（`Complete(Complete(v)) == Complete(v)`）であり、構文木（`*lkal.File`）を直接書き換える `Fill` のような破壊的 API は設けない。
+- `default` の展開が同じレコード仕様へ戻る循環（例: `def "loop"` のフィールドが `use = &def/loop` かつ `default {}`）は、コンパイル時に `L606` で拒否する。実行時に深さの上限へ達したときは、入力文書の入れ子とデフォルト展開を区別する。後者の hint は default expansion が上限を超えたことを述べ、前者は従来どおり入れ子の上限を述べる。
 
 ### 5. エラーコード（`L501`〜`L510` および `L601`〜`L607`）
 
-スキーマ検証およびスキーマコンパイルでは、途中で打ち切らずにすべての違反を収集し、ソートして最大 20 件まで `*lkal.ErrorList` として返す。
+スキーマ検証およびスキーマコンパイルでは、途中で打ち切らずにすべての違反を収集し、ソートして最大 20 件まで `*lkal.ErrorList` として返す。例外は `lkal-schema` が文字列であり、その値が `"0.2"` でないときだけである。このときは未知の版に対する余計な `L601` を避けるため、`L607` を 1 件返して終わる。`lkal-schema` が文字列でない、またはキーが無い場合は `L607` にせず、メタスキーマ違反として `L601` を集める。
 
 #### データ検証エラー（`L501`〜`L510`）
 
@@ -100,7 +103,7 @@ depends-on: ["0001", "0002", "0004", "0006", "0009", "0010"]
 | `L603` | definition cycle | `use` の連鎖が `record` や `map` を介さずに循環している |
 | `L604` | invalid pattern | `pattern` の文字列が RE2 正規表現としてコンパイルできない |
 | `L605` | default does not match its type | `default` の値がそのフィールドの型指定・制約に違反している |
-| `L606` | conflicting constraints | `min > max`、`min-length > max-length`、`min-segments > max-segments`（または `max-segments < 1`）、`min-items > max-items`、`min-entries > max-entries`、`required = true` と `default` の同時指定、`field` と `reserved` の名前重複、`type` と `types` の同時指定、`use` と他キー（`type`/`types`/型制約）の併用、`unique-by` の対象が `.record` でないまたは閉じた `.record` に未定義のフィールド、空のリスト制約（`values`/`one-of`/`units`/`targets`/`unique-by`）、`one-of` と他の制約の矛盾など |
+| `L606` | conflicting constraints | `min > max`、`min-length > max-length`、`min-segments > max-segments`（または `max-segments < 1`）、`min-items > max-items`、`min-entries > max-entries`、`required = true` と `default` の同時指定、`field` と `reserved` の名前重複、`type` と `types` の同時指定、`use` と他キー（`type`/`types`/型制約）の併用、`unique-by` の対象が `.record` でないまたは閉じた `.record` に未定義のフィールド、空のリスト制約（`values`/`one-of`/`units`/`targets`/`unique-by`）、`one-of` と他の制約の矛盾、共用体の `one-of` がすべての型を覆えない、`default` 展開の循環など |
 | `L607` | unsupported schema version | `lkal-schema` が `"0.2"` でない |
 
 ### 6. スキーマ互換性の不変条件

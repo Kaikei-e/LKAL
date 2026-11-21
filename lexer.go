@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Kaikei-e/LKAL/internal/syntax"
 )
 
 var symbolTokens = [256]tokKind{
@@ -242,9 +244,7 @@ func lexCommentText(rawAfterHashes string) string {
 	return strings.TrimRight(rawAfterHashes, " \t")
 }
 
-func isControlChar(r rune) bool {
-	return (r < 0x20 && r != '\t') || r == 0x7f
-}
+func isControlChar(r rune) bool { return syntax.IsControlChar(r) }
 
 func lexCheckCommentOrRawInvalidChars(file string, lineNum int, cols []int, line []byte, off int) []*Error {
 	var errs []*Error
@@ -258,9 +258,7 @@ func lexCheckCommentOrRawInvalidChars(file string, lineNum int, cols []int, line
 	return errs
 }
 
-func isRadixPrefix(b byte) bool {
-	return b == 'x' || b == 'X' || b == 'b' || b == 'B' || b == 'o' || b == 'O'
-}
+func isRadixPrefix(b byte) bool { return syntax.IsRadixPrefix(b) }
 
 func isExponentPrefix(s string) bool {
 	if len(s) < 2 || (s[0] != 'e' && s[0] != 'E') {

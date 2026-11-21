@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/Kaikei-e/LKAL/internal/syntax"
 )
 
 func Parse(name string, src []byte) (*File, error) {
@@ -661,31 +663,7 @@ func buildValue(n node) Value {
 	return nil
 }
 
-func normalizeNumber(s string) string {
-	if s == "-0" {
-		return "0"
-	}
-	intPart, fracPart, hasDot := strings.Cut(s, ".")
-	if !hasDot {
-		return s
-	}
-	isNeg := false
-	if strings.HasPrefix(intPart, "-") {
-		isNeg = true
-		intPart = intPart[1:]
-	}
-	fracPart = strings.TrimRight(fracPart, "0")
-	if fracPart == "" {
-		fracPart = "0"
-	}
-	if intPart == "0" && fracPart == "0" {
-		return "0.0"
-	}
-	if isNeg {
-		return "-" + intPart + "." + fracPart
-	}
-	return intPart + "." + fracPart
-}
+func normalizeNumber(s string) string { return syntax.NormalizeNumber(s) }
 
 func splitQuantity(s string) (string, string) {
 	for i := 0; i < len(s); i++ {
