@@ -24,14 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write # create and push the release tag on main
+      contents: write # create the annotated tag through the GitHub API
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-
       - name: Require main
         if: github.ref != 'refs/heads/main'
         run: |
@@ -57,21 +51,29 @@ jobs:
           print(version)
           PY
 
-      - name: Create and push tag
+      - name: Create tag
         env:
           RELEASE_VERSION: ${{ inputs.version }}
+          # gh reads this from the environment. It is not passed on a command line
+          # and is not written into git config.
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_VERSION}" >/dev/null 2>&1; then
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_VERSION}" --jq .ref >/dev/null 2>&1; then
             echo "tag ${RELEASE_VERSION} already exists" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${RELEASE_VERSION}" -m "Release ${RELEASE_VERSION}"
-          git -c "http.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
-            push origin "refs/tags/${RELEASE_VERSION}"
+          tag_sha="$(jq -n \
+            --arg tag "${RELEASE_VERSION}" \
+            --arg message "Release ${RELEASE_VERSION}" \
+            --arg object "${GITHUB_SHA}" \
+            '{tag:$tag, message:$message, object:$object, type:"commit"}' \
+            | gh api --method POST "repos/${GITHUB_REPOSITORY}/git/tags" --input - --jq .sha)"
+          jq -n \
+            --arg ref "refs/tags/${RELEASE_VERSION}" \
+            --arg sha "${tag_sha}" \
+            '{ref:$ref, sha:$sha}' \
+            | gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" --input - --jq .ref
 
   release:
     name: Publish GitHub Release

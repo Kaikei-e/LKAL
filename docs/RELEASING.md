@@ -15,7 +15,7 @@ LKAL のタグ付きリリースは、GitHub Actions の **Release** ワーク�
 
 1. `version` が `vMAJOR.MINOR.PATCH`（任意のプレリリースとビルドメタデータ付き）であることを検査する。違う文字列は失敗する。
 2. 同じ名前のタグが既に無いことを確認する。
-3. `main` の先端にその注釈付きタグを作り、`origin` へ push する。`main` 以外のブランチから起動した場合はタグを作らず失敗する。
+3. `main` の先端（その実行の `GITHUB_SHA`）に注釈付きタグを、GitHub API だけで作る。トークンは `gh` の環境変数にだけ渡し、git の引数や設定ファイルには書かない。このジョブはリポジトリを checkout しない。`main` 以外のブランチから起動した場合はタグを作らず失敗する。
 4. タグの push が同じワークフローのリリースジョブを起動する。
 5. GoReleaser が `lkal` を linux / darwin / windows の amd64 と arm64 向けにビルドし、アーカイブと `checksums.txt` を GitHub Release に載せる。バイナリの版は `-X main.version=<tag>` で埋め込む。`lkal version` は `v0.2.0` のようなタグ文字列を出す。
 
